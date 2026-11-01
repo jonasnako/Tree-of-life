@@ -26,6 +26,11 @@ export const leafLight = {
   uSunView: { value: new THREE.Vector3(0, 1, 0) },
   uSunColor: { value: new THREE.Color('#ffd9a0') },
   uCrown: { value: new THREE.Vector4(0, 5, 0, 5) }, // centre xyz, radius: for self-shading
+  // Cutaway: foliage between the camera and this point (w = strength 0..1)
+  // is cleared, so a single leaf deep in the crown can be seen.
+  uReveal: { value: new THREE.Vector4(0, 0, 0, 0) },
+  // First branch-texture sample of the followed species' twig: its leaf glows.
+  uFocusSample: { value: -1 },
 };
 
 export const LEAF_LIFE = 0.14; // depth units a shoot leaf lives
@@ -243,6 +248,9 @@ uniform highp sampler2D uBranchTex;
 uniform vec4 uCrown;
 varying vec3 vLeafColor;
 varying float vShade;
+varying float vGlow;
+uniform vec4 uReveal;
+uniform float uFocusSample;
 ${WIND_GLSL}
 
 vec4 sampleTexel(float s, float k) {
@@ -304,10 +312,20 @@ void computeLeaf(out vec3 outPos, out vec3 outNormal) {
   vec3 Z = vec3(0.0, 1.0, 0.0) - Y * Y.y;
   Z = dot(Z, Z) < 1e-4 ? radial : normalize(Z);
   vec3 X = cross(Y, Z);
+  // The followed species' own leaf glows softly.
+  vGlow = (aMode.x > 0.5 && abs(aBranch.x - uFocusSample) < 0.5) ? 1.0 : 0.0;
+  // Cutaway: hide leaves near the line of sight to the revealed point.
+  if (uReveal.w > 0.0 && vGlow < 0.5) {
+    vec3 toPoint = uReveal.xyz - cameraPosition;
+    float along = clamp(dot(P - cameraPosition, toPoint) / dot(toPoint, toPoint), 0.0, 1.0);
+    float off = length(P - (cameraPosition + toPoint * along));
+    float cone = mix(0.12, 0.9, along);
+    shown *= 1.0 - uReveal.w * (1.0 - smoothstep(cone * 0.7, cone, off)) * step(along, 0.98);
+  }
   float size = aShape.z * scale * shown;
   vec3 pos = P + (X * position.x + Y * position.y + Z * position.z) * size;
   vec3 sway = windSway(P, age);
-  pos += sway + vec3(0.0, sin(uTime * 4.0 + P.x * 3.1 + P.z * 2.3) * 0.04 * uWind * position.y * size, 0.0);
+  pos += sway + vec3(0.0, sin(uTime * 1.7 + P.x * 3.1 + P.z * 2.3) * 0.02 * uWind * position.y * size, 0.0);
   // Self-shading: leaves deep inside the crown get less light.
   float inner = length(P - uCrown.xyz) / max(uCrown.w, 0.5);
   vShade = mix(0.45, 1.0, smoothstep(0.25, 0.95, inner));
@@ -336,14 +354,15 @@ function createGpuLeafMaterial(map, uniforms, { alphaTest, spray }) {
         .replace('#include <beginnormal_vertex>', GPU_LEAF_NORMAL)
         .replace('#include <begin_vertex>', 'vec3 transformed = leafPos;');
     shader.fragmentShader =
-      'uniform vec3 uSunView;\nuniform vec3 uSunColor;\nvarying vec3 vLeafColor;\nvarying float vShade;\n' +
+      'uniform vec3 uSunView;\nuniform vec3 uSunColor;\nvarying vec3 vLeafColor;\nvarying float vShade;\nvarying float vGlow;\n' +
       shader.fragmentShader
         .replace('#include <map_fragment>', '#include <map_fragment>\ndiffuseColor.rgb *= vLeafColor * vShade;')
         .replace(
           '#include <emissivemap_fragment>',
           /* glsl */ `#include <emissivemap_fragment>
           float through = pow(max(dot(normalize(vViewPosition), -uSunView), 0.0), 3.0);
-          totalEmissiveRadiance += diffuseColor.rgb * (uSunColor * through * 0.9 + 0.07);`,
+          totalEmissiveRadiance += diffuseColor.rgb * (uSunColor * through * 0.9 + 0.07);
+          totalEmissiveRadiance += vec3(1.0, 0.72, 0.18) * vGlow * 0.35;`,
         );
   };
   const depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: alphaTest ? map : null, alphaTest });

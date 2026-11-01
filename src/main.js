@@ -13,16 +13,17 @@ import { createUI, formatMa } from './ui.js';
 import { createCallouts } from './callouts.js';
 import { addPlaceholderForks, layoutTree, locate } from './tree/layout.js';
 import { createTreeMesh } from './tree/treeMesh.js';
+import { thicknessAt } from './tree/growth.js';
 import { createLeaves, leafLight } from './tree/leaves.js';
 import { createBranchTexture } from './tree/branchTexture.js';
 import { createLeafFall } from './tree/leafFall.js';
-import { windUniforms } from './wind.js';
+import { windUniforms, windSway } from './wind.js';
 
 const RUN_SECONDS = 60; // seed to today at 1×
 
 const canvas = document.getElementById('scene');
 const { renderer, scene, sun, sky } = createScene(canvas);
-const { camera, controls, update: updateCamera } = createCamera(canvas);
+const { camera, controls, update: updateCamera, flyTo, release: releaseCamera } = createCamera(canvas);
 handleResize(renderer, camera);
 
 // Data -> layout -> meshes.
@@ -58,8 +59,13 @@ function lineageEvents() {
   return events;
 }
 const SHOWN_FORKS = 3; // the most recent forks keep their callouts
-const callouts = createCallouts();
+// Clicking a label flies to the branch or leaf it points at.
+const callouts = createCallouts({ onPick: (c) => flyTo(c.anchor, c.kind === 'focus' ? 0.7 : 3.5) });
 const anchor = new THREE.Vector3();
+const sway = new THREE.Vector3();
+const radialV = new THREE.Vector3();
+const leafY = new THREE.Vector3();
+const revealAt = new THREE.Vector3();
 function updateCallouts(now) {
   const list = [];
   const past = ui.events.filter((e) => e.ma >= clock.ma).slice(-SHOWN_FORKS);
@@ -70,22 +76,39 @@ function updateCallouts(now) {
     // Point partway along the new branch, never past its growing tip.
     const depth = Math.min(now, d0 + (d1 - d0) * 0.45, d1);
     pointAt(br, Math.max(d0, depth), anchor);
+    anchor.add(windSway(anchor, now - depth, sway)); // move with the wind, as the wood does
     const fresh = Math.min(1, (now - d0) / 0.004);
     const sub = `${formatMa(e.ma)} Ma · ${speciesFmt.format(e.sister.species)} species${e.others ? ` · +${e.others} more lineage${e.others > 1 ? 's' : ''}` : ''}`;
     list.push({ key: e.sister.id, title: displayName(e.sister), sub, anchor: anchor.clone(), alpha: fresh * [0.55, 0.75, 1][k + SHOWN_FORKS - past.length] });
   });
-  // The followed species: its own single leaf at the tip of its twig.
+  // The followed species: the middle of its own single leaf at the tip of
+  // its twig (same placement as the leaf shader).
   if (clock.ma <= tree.focus.splitMa) {
-    const br = tree.focus.branch;
-    const end = Math.min(now, br.depths.at(-1));
-    pointAt(br, end, anchor);
-    const { i } = locate(br, end);
-    anchor.addScaledVector(br.tangents[i + 1] ?? br.tangents[i], 0.12);
+    leafCentre(tree.focus.branch, now, anchor);
     list.push({ key: 'focus', kind: 'focus', title: tree.focusLabel, sub: tree.focus.name, anchor: anchor.clone() });
   }
   callouts.update(list, camera, sphere.center);
 }
+function leafCentre(br, now, out) {
+  const d0 = br.depths[0];
+  const d1 = br.depths.at(-1);
+  const depth = Math.min(now, d1) - 0.0003 * Math.min(1, (d1 - d0) / 0.03);
+  const { i, t } = locate(br, depth);
+  out.lerpVectors(br.points[i], br.points[i + 1], t);
+  const age = now - depth;
+  const open = Math.min(1, Math.max(0, (now - d0) / 0.008));
+  radialV.copy(br.normals[i]); // the single leaf sits at angle 0
+  out.addScaledVector(radialV, br.radii[i] * thicknessAt(age) * 0.9);
+  const tilt = 0.12 * open;
+  leafY.copy(br.tangents[i]).multiplyScalar(Math.cos(tilt)).addScaledVector(radialV, Math.sin(tilt)).normalize();
+  const size = 0.26 * (0.25 + 0.75 * open);
+  out.add(windSway(out, age, sway)).addScaledVector(leafY, size * 0.5);
+  return out;
+}
 const ui = createUI(clock, lineageEvents());
+// Playback hands the camera back to the automatic framing.
+clock.onChange(() => { if (clock.playing) releaseCamera(); });
+document.getElementById('restart').addEventListener('click', releaseCamera);
 
 // Pick whose lineage to follow; the replay starts again from the seed.
 const focusSelect = document.getElementById('focus');
@@ -93,6 +116,7 @@ for (const s of tree.showcase) focusSelect.add(new Option(s.label, s.key, false,
 focusSelect.addEventListener('change', () => {
   setFocus(tree, focusSelect.value);
   ui.setEvents(lineageEvents());
+  releaseCamera();
   clock.restart();
 });
 
@@ -157,6 +181,13 @@ function frame(time) {
   camera.updateMatrixWorld();
   leafLight.uSunView.value.copy(sunDir).transformDirection(camera.matrixWorldInverse);
   leafLight.uCrown.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
+  // Clear the view to the followed leaf when the camera is close to it.
+  if (clock.ma <= tree.focus.splitMa) {
+    leafCentre(tree.focus.branch, now, revealAt);
+    const near = 1 - THREE.MathUtils.smoothstep(camera.position.distanceTo(revealAt), 2.5, 6);
+    leafLight.uReveal.value.set(revealAt.x, revealAt.y, revealAt.z, near);
+  } else leafLight.uReveal.value.w = 0;
+  leafLight.uFocusSample.value = branchTex.start.get(tree.focus.branch) ?? -1;
   updateCallouts(now);
 
   ui.update();

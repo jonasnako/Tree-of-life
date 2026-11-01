@@ -2,7 +2,7 @@
 
 A browser-based 3D Tree of Life that grows like a real tree. See `CLAUDE.md` for the full brief.
 
-**Status:** build step 4 (real data) on top of steps 1–3, with an ancient, gnarled look. The tree is grown from a real slice of the Tree of Life: the lineages of seven showcase species (human, common octopus, English oak, fly agaric, *E. coli*, a diatom, an archaeon) with every sister clade along the way, forking on dated divergences. Pick whose lineage to follow at the top right. As each new lineage splits off, a label with a line points to its branch; the followed species ends in its own single leaf (each leaf is a species), labelled at the end.
+**Status:** build step 4 (real data) on top of steps 1–3, with an ancient, gnarled look. The tree is grown from a real slice of the Tree of Life: the lineages of seven showcase species (human, common octopus, English oak, fly agaric, *E. coli*, a diatom, an archaeon) with every sister clade along the way, forking on dated divergences. Pick whose lineage to follow at the top right. As each new lineage splits off, a label with a line points to its branch; the followed species ends in its own single leaf (each leaf is a species), labelled at the end. Click a label to fly to it; foliage in the way is cleared and the species' leaf glows. Wheel and pinch zoom toward the cursor; once you move the camera it stays put until you press play.
 
 ## Run it
 

@@ -1,44 +1,48 @@
-// Labels in the scene: a name with a thin line pointing at a branch or a
-// leaf. Each label sits a little outward from the tree (seen from the
-// camera), so lines fan out from the crown and labels don't cover it.
+// Labels in the scene: a small name with a hairline leader that bends into
+// an underline beneath it, pointing at a branch or a leaf. Labels sit a
+// little outward from the tree (seen from the camera), so leaders fan out
+// from the crown. Click a label to fly to what it points at.
 import * as THREE from 'three';
 
-const OFFSET = 110; // px from the anchor to the label
+const OFFSET = 96; // px from the anchor to the label
 const MARGIN = 16;
+const NS = 'http://www.w3.org/2000/svg';
 
 /**
  * @typedef {{ key: string, title: string, sub?: string, anchor: THREE.Vector3, alpha?: number, kind?: string }} Callout
+ * @param {{ onPick?: (callout: Callout) => void }} options
  */
-export function createCallouts() {
+export function createCallouts({ onPick } = {}) {
   const svg = document.getElementById('callout-lines');
   const layer = document.getElementById('callouts');
-  const items = new Map(); // key -> { el, halo, line, dot }
+  const items = new Map();
   const p = new THREE.Vector3();
   const c = new THREE.Vector3();
 
-  function make(key, kind) {
-    const el = document.createElement('div');
-    el.className = `callout ${kind ?? ''}`;
+  function make(callout) {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = `callout ${callout.kind ?? ''}`;
     el.innerHTML = '<span class="callout-title"></span><span class="callout-sub"></span>';
     layer.append(el);
-    const ns = 'http://www.w3.org/2000/svg';
-    const halo = document.createElementNS(ns, 'line');
+    const halo = document.createElementNS(NS, 'polyline');
     halo.setAttribute('class', 'callout-halo');
-    const line = document.createElementNS(ns, 'line');
-    line.setAttribute('class', 'callout-line');
-    const dot = document.createElementNS(ns, 'circle');
-    dot.setAttribute('class', `callout-dot ${kind ?? ''}`);
-    dot.setAttribute('r', kind === 'focus' ? '4.5' : '3');
+    const line = document.createElementNS(NS, 'polyline');
+    line.setAttribute('class', `callout-line ${callout.kind ?? ''}`);
+    const dot = document.createElementNS(NS, 'circle');
+    dot.setAttribute('class', `callout-dot ${callout.kind ?? ''}`);
+    dot.setAttribute('r', callout.kind === 'focus' ? '3' : '2');
     svg.append(halo, line, dot);
-    const item = { el, halo, line, dot, title: null, sub: null };
-    items.set(key, item);
+    const item = { el, halo, line, dot, title: null, sub: null, callout };
+    el.addEventListener('click', () => onPick?.(item.callout));
+    items.set(callout.key, item);
     return item;
   }
 
   /**
    * @param {Callout[]} list
    * @param {THREE.Camera} camera
-   * @param {THREE.Vector3} center the tree's centre, labels move away from it
+   * @param {THREE.Vector3} center the tree's centre; labels move away from it
    */
   function update(list, camera, center) {
     const w = window.innerWidth;
@@ -55,7 +59,8 @@ export function createCallouts() {
       if (p.z > 1 || p.z < -1) continue; // behind the camera
       const ax = (p.x * 0.5 + 0.5) * w;
       const ay = (-p.y * 0.5 + 0.5) * h;
-      const item = items.get(callout.key) ?? make(callout.key, callout.kind);
+      const item = items.get(callout.key) ?? make(callout);
+      item.callout = callout;
       seen.add(callout.key);
       if (item.title !== callout.title) item.el.firstChild.textContent = item.title = callout.title;
       if (item.sub !== (callout.sub ?? '')) item.el.lastChild.textContent = item.sub = callout.sub ?? '';
@@ -69,16 +74,17 @@ export function createCallouts() {
       const right = dx >= 0;
       const lw = item.el.offsetWidth;
       const lh = item.el.offsetHeight;
-      let lx = ax + dx * OFFSET;
-      let ly = ay + dy * OFFSET - lh / 2;
-      let left = right ? lx : lx - lw;
+      const bx = ax + dx * OFFSET * 0.6; // where the leader bends
+      let ly = ay + dy * OFFSET - lh;
+      let left = right ? bx + 10 : bx - 10 - lw;
       left = Math.min(Math.max(left, MARGIN), w - lw - MARGIN);
-      ly = Math.min(Math.max(ly, MARGIN + 140), bottomLimit - lh);
-      // Step down past labels already placed.
+      ly = Math.min(Math.max(ly, MARGIN), bottomLimit - lh);
+      // Keep clear of the counter in the top-left corner.
+      if (left < 250 && ly < 150) ly = 150;
       for (let tries = 0; tries < 6; tries++) {
-        const hit = placed.find((r) => left < r.x + r.w + 6 && left + lw + 6 > r.x && ly < r.y + r.h + 4 && ly + lh + 4 > r.y);
+        const hit = placed.find((r) => left < r.x + r.w + 8 && left + lw + 8 > r.x && ly < r.y + r.h + 2 && ly + lh + 2 > r.y);
         if (!hit) break;
-        ly = hit.y + hit.h + 6;
+        ly = hit.y + hit.h + 4;
       }
       placed.push({ x: left, y: ly, w: lw, h: lh });
 
@@ -86,14 +92,13 @@ export function createCallouts() {
       item.el.style.transform = `translate(${Math.round(left)}px, ${Math.round(ly)}px)`;
       item.el.style.opacity = alpha;
       item.el.classList.toggle('left', !right);
-      // Line from the anchor to the label's near edge.
-      const ex = right ? left : left + lw;
-      const ey = ly + lh / 2;
+      // Leader: anchor -> bend -> along the underline beneath the label.
+      const under = ly + lh + 1;
+      const near = right ? left : left + lw;
+      const far = right ? left + lw : left;
+      const pts = `${ax.toFixed(1)},${ay.toFixed(1)} ${near.toFixed(1)},${under.toFixed(1)} ${far.toFixed(1)},${under.toFixed(1)}`;
       for (const l of [item.halo, item.line]) {
-        l.setAttribute('x1', ax.toFixed(1));
-        l.setAttribute('y1', ay.toFixed(1));
-        l.setAttribute('x2', ex.toFixed(1));
-        l.setAttribute('y2', ey.toFixed(1));
+        l.setAttribute('points', pts);
         l.style.opacity = alpha;
       }
       item.dot.setAttribute('cx', ax.toFixed(1));

@@ -1,12 +1,12 @@
 // Orbit camera. During replay it follows the growing tip of the followed
 // lineage, close enough to watch the forks, and drifts slowly around the
 // tree. When time reaches today it pulls back to show the whole tree.
-// While you drag or zoom it hands control to you, then eases back after a pause.
+// Once you drag or zoom, it stays where you put it until playback starts
+// again. Wheel and pinch zoom toward the cursor; flyTo() glides to a point.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
-const RESUME_AFTER = 4; // seconds of no input before auto-framing resumes
 const ORBIT_SPEED = 0.06; // radians per second of slow drift around the tree
 
 export function createCamera(canvas) {
@@ -16,16 +16,22 @@ export function createCamera(canvas) {
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.minDistance = 0.4;
+  controls.minDistance = 0.12;
+  controls.zoomToCursor = true;
   controls.maxDistance = 120;
   controls.maxPolarAngle = Math.PI * 0.495; // stay above the ground
   controls.target.set(0, 0.15, 0);
 
-  let idle = Infinity;
   let interacting = false;
-  controls.addEventListener('start', () => { interacting = true; });
-  controls.addEventListener('end', () => { interacting = false; idle = 0; });
-  canvas.addEventListener('wheel', () => { idle = 0; }, { passive: true });
+  let manual = false; // the user has taken the camera
+  let fly = null;
+  controls.addEventListener('start', () => {
+    interacting = true;
+    manual = true;
+    fly = null;
+  });
+  controls.addEventListener('end', () => { interacting = false; });
+  canvas.addEventListener('wheel', () => { manual = true; fly = null; }, { passive: true });
 
   const desiredTarget = new THREE.Vector3();
   const offset = new THREE.Vector3();
@@ -36,8 +42,14 @@ export function createCamera(canvas) {
    * @param {{center: THREE.Vector3, radius: number, tip: THREE.Vector3, finished: boolean}} view
    */
   function update(dt, view) {
-    if (!interacting) idle += dt;
-    if (!interacting && idle > RESUME_AFTER) {
+    if (fly) {
+      fly.t = Math.min(1, fly.t + dt / fly.duration);
+      const e = fly.t * fly.t * (3 - 2 * fly.t);
+      controls.target.lerpVectors(fly.fromTarget, fly.toTarget, e);
+      offset.copy(fly.fromOffset).lerp(fly.toOffset, e);
+      camera.position.copy(controls.target).add(offset);
+      if (fly.t >= 1) fly = null;
+    } else if (!interacting && !manual) {
       const k = 1 - Math.exp(-dt * (view.finished ? 0.7 : 1.6));
       const fit = view.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.min(1, camera.aspect);
       let desiredDistance;
@@ -64,5 +76,25 @@ export function createCamera(canvas) {
     controls.update();
   }
 
-  return { camera, controls, update };
+  /** Glide to look at a point from a given distance; the camera then stays there. */
+  function flyTo(point, distance) {
+    manual = true;
+    const fromOffset = camera.position.clone().sub(controls.target);
+    fly = {
+      t: 0,
+      duration: 1.4,
+      fromTarget: controls.target.clone(),
+      toTarget: point.clone(),
+      fromOffset,
+      toOffset: fromOffset.clone().setLength(distance),
+    };
+  }
+
+  /** Hand the camera back to the automatic framing (e.g. when playback starts). */
+  function release() {
+    manual = false;
+    fly = null;
+  }
+
+  return { camera, controls, update, flyTo, release };
 }
