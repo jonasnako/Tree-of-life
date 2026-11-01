@@ -12,8 +12,11 @@
 //   tip leaves    - ride the growing tip of a branch and stay on living tips:
 //                   one leaf per species (a one-species tip ends in exactly
 //                   one leaf), up to TUFT_MAX
-//   sprays        - extra foliage for rich clades alive today; they fill in
-//                   slowly as the clade ages, standing for leaves too many to draw
+//   foliage       - for rich clades alive today: a cloud of leafy cards around
+//                   the tip whose size grows with the species count (step 5),
+//                   filling in slowly as the clade ages. Cards are shuffled,
+//                   so from far away drawing only the first part of them,
+//                   a little bigger, keeps the look at a fraction of the cost.
 //   seed leaves   - the seedling's two cotyledons (2 instances, CPU)
 import * as THREE from 'three';
 import { createRandom } from '../random.js';
@@ -79,15 +82,29 @@ export function createLeaves(branches, branchTex) {
         leafInst.push([br, 1, (k / tips) * 0.006 + 0.0006, k * 2.39996 + rand.range(-0.3, 0.3), rand.range(0.35, 0.8), rand.range(0.16, 0.24), rand.range(-0.03, 0.03)]);
       }
     }
-    rand = createRandom(`${br.node.id}-sprays`);
-    const richness = Math.log10((br.node.species ?? 1) + 1);
-    const sprays = living && species > TUFT_MAX ? Math.round(THREE.MathUtils.clamp(2.5 * Math.log10(species / TUFT_MAX), 1, 16)) : 0;
-    for (let k = 0; k < sprays; k++) {
-      sprayInst.push([br, 1, rand() ** 1.5 * SPRAY_REACH, rand.range(0, Math.PI * 2), rand.range(0.35, 1.25), rand.range(0.4, 0.65) * (0.85 + 0.1 * richness), rand.range(-0.06, 0.05)]);
+    if (living && species > TUFT_MAX) {
+      // A foliage mass: its radius grows with the sixth root of the species
+      // count (1,000 species ~0.7, a million ~2.2 world units); the number of
+      // cards grows with its surface.
+      rand = createRandom(`${br.node.id}-foliage`);
+      const R = 0.22 * Math.pow(species, 1 / 6);
+      const cards = Math.round(THREE.MathUtils.clamp(12 * (R / 0.7) ** 2, 2, 160));
+      for (let k = 0; k < cards; k++) {
+        let x, y, z;
+        do {
+          x = rand.range(-1, 1);
+          y = rand.range(-1, 1);
+          z = rand.range(-1, 1);
+        } while (x * x + y * y + z * z > 1);
+        const cluster = [x * R * 0.8 + R * 0.35, y * R, z * R];
+        sprayInst.push([br, 1, 0, 0, rand.range(0.3, 1.0), rand.range(0.4, 0.62), rand.range(-0.06, 0.05), cluster, rand()]);
+      }
     }
   }
 
-  const uniforms = { uNow: { value: 0 }, uBranchTex: { value: branchTex.texture }, ...windUniforms, ...leafLight };
+  // Shuffle the foliage cards so any leading part of the list is an even sample.
+  sprayInst.sort((a, b) => a[8] - b[8]);
+  const uniforms = { uNow: { value: 0 }, uBranchTex: { value: branchTex.texture }, uLodScale: { value: 1 }, ...windUniforms, ...leafLight };
   const leafMat = createGpuLeafMaterial(createLeafTexture(), uniforms, { alphaTest: 0, spray: false });
   const sprayMat = createGpuLeafMaterial(createSprayTexture(), uniforms, { alphaTest: 0.45, spray: true });
   const leafMesh = gpuLeafMesh(createLeafGeometry(), leafInst, branchTex, leafMat);
@@ -208,7 +225,14 @@ export function createLeaves(branches, branchTex) {
     prevNow = now;
   }
 
-  return { group, update, dying, counts: { leaves: leafInst.length, sprays: sprayInst.length } };
+  /** Level of detail: draw this share of the foliage cards, scaled to cover. */
+  function setDetail(share) {
+    const f = THREE.MathUtils.clamp(share, 0.15, 1);
+    sprayMesh.geometry.instanceCount = Math.max(1, Math.ceil(sprayInst.length * f));
+    uniforms.uLodScale.value = Math.min(2.2, 1 / Math.sqrt(f));
+  }
+
+  return { group, update, dying, setDetail, counts: { leaves: leafInst.length, sprays: sprayInst.length } };
 }
 
 /** One instanced mesh; each instance carries its branch and leaf parameters. */
@@ -219,7 +243,9 @@ function gpuLeafMesh(base, inst, branchTex, material) {
   const aBranch = new Float32Array(inst.length * 4);
   const aMode = new Float32Array(inst.length * 4);
   const aShape = new Float32Array(inst.length * 4);
-  inst.forEach(([br, mode, value, angle, tilt, size, hue], k) => {
+  const aCluster = new Float32Array(inst.length * 3);
+  inst.forEach(([br, mode, value, angle, tilt, size, hue, cluster], k) => {
+    if (cluster) aCluster.set(cluster, k * 3);
     const living = !br.node.children.length && !br.node.endMa ? 1 : 0;
     aBranch.set([branchTex.start.get(br), br.points.length, br.depths[0], br.depths.at(-1)], k * 4);
     aMode.set([mode, value, living, 0], k * 4);
@@ -228,6 +254,7 @@ function gpuLeafMesh(base, inst, branchTex, material) {
   geometry.setAttribute('aBranch', new THREE.InstancedBufferAttribute(aBranch, 4));
   geometry.setAttribute('aMode', new THREE.InstancedBufferAttribute(aMode, 4));
   geometry.setAttribute('aShape', new THREE.InstancedBufferAttribute(aShape, 4));
+  geometry.setAttribute('aCluster', new THREE.InstancedBufferAttribute(aCluster, 3));
   geometry.instanceCount = inst.length;
   const mesh = new THREE.Mesh(geometry, material.material);
   mesh.customDepthMaterial = material.depthMaterial;
@@ -243,6 +270,8 @@ const GPU_LEAF_VERTEX_HEADER = /* glsl */ `
 attribute vec4 aBranch; // first sample, sample count, start depth, end depth
 attribute vec4 aMode;   // mode (0 shoot leaf, 1 rides the tip), depth or lag, living, -
 attribute vec4 aShape;  // angle, tilt, size, hue
+attribute vec3 aCluster; // foliage: offset from the tip along tangent, normal, binormal
+uniform float uLodScale;
 uniform float uNow;
 uniform highp sampler2D uBranchTex;
 uniform vec4 uCrown;
@@ -306,7 +335,14 @@ void computeLeaf(out vec3 outPos, out vec3 outNormal) {
   vec3 N = normalize(C0.xyz);
   vec3 Bn = cross(T, N);
   vec3 radial = cos(aShape.x) * N + sin(aShape.x) * Bn;
-  P += radial * mix(A0.w, A1.w, st) * woodThickness(age) * 0.9;
+  #ifdef SPRAY_LEAVES
+    // Foliage mass: cards spread through a cloud around the tip, facing out.
+    vec3 off = T * aCluster.x + N * aCluster.y + Bn * aCluster.z;
+    P += off * (0.3 + 0.7 * open);
+    radial = normalize(N * aCluster.y + Bn * aCluster.z + T * 1e-3);
+  #else
+    P += radial * mix(A0.w, A1.w, st) * woodThickness(age) * 0.9;
+  #endif
   float tilt = aShape.y * open;
   vec3 Y = normalize(T * cos(tilt) + radial * sin(tilt));
   vec3 Z = vec3(0.0, 1.0, 0.0) - Y * Y.y;
@@ -323,12 +359,15 @@ void computeLeaf(out vec3 outPos, out vec3 outNormal) {
     shown *= 1.0 - uReveal.w * (1.0 - smoothstep(cone * 0.7, cone, off)) * step(along, 0.98);
   }
   float size = aShape.z * scale * shown;
+  #ifdef SPRAY_LEAVES
+    size *= uLodScale;
+  #endif
   vec3 pos = P + (X * position.x + Y * position.y + Z * position.z) * size;
   vec3 sway = windSway(P, age);
   pos += sway + vec3(0.0, sin(uTime * 1.7 + P.x * 3.1 + P.z * 2.3) * 0.02 * uWind * position.y * size, 0.0);
   // Self-shading: leaves deep inside the crown get less light.
   float inner = length(P - uCrown.xyz) / max(uCrown.w, 0.5);
-  vShade = mix(0.45, 1.0, smoothstep(0.25, 0.95, inner));
+  vShade = mix(0.62, 1.08, smoothstep(0.2, 0.95, inner));
   outPos = pos;
   outNormal = Z;
   }

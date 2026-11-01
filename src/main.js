@@ -181,6 +181,8 @@ function frame(time) {
   camera.updateMatrixWorld();
   leafLight.uSunView.value.copy(sunDir).transformDirection(camera.matrixWorldInverse);
   leafLight.uCrown.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
+  // Level of detail: from far away, fewer (larger) foliage cards.
+  leaves.setDetail(((sphere.radius * 1.6) / Math.max(dist, 0.1)) ** 2);
   // Clear the view to the followed leaf when the camera is close to it.
   if (clock.ma <= tree.focus.splitMa) {
     leafCentre(tree.focus.branch, now, revealAt);
