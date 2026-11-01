@@ -6,6 +6,8 @@ A browser-based 3D Tree of Life that grows like a real tree. See `CLAUDE.md` for
 
 Step 3 adds the look: veined leaves that glow when backlit, deeper bark on old wood that weathers grey and gathers moss near the ground, gentle wind (young wood bends more than old), a sky with a warm sun, and a camera that follows the human tip with a slow orbit, then pulls back to the whole tree with a label on the human leaf.
 
+The ancient look: old wood twists into fluted ridges and grooves with burls, the trunk leans, bark turns grey, deeply fissured and mossy, buttress and surface roots spread over the ground, the living crown is dense with leaf sprays, and dead leaves fall and pile up as litter.
+
 ## Run it
 
 Needs [Node.js](https://nodejs.org) 20 or newer.
@@ -36,8 +38,9 @@ Open the address it prints (usually http://localhost:5173). `npm run dev` also p
 | `src/clock.js` | Growth clock in real Ma; speed comes from a rate function |
 | `src/tree/layout.js` | Branch centrelines: seeded bends, fork angles by species share, pipe-model radii; stand-in forks for collapsed clades |
 | `src/tree/growth.js` | How wood ages: tip taper, thickening, shoot → twig → bark |
-| `src/tree/treeMesh.js` | All branches as one mesh; growth and bark run in the shader |
-| `src/tree/leaves.js` | Instanced veined leaves on young shoots, tip tufts, seed leaves; wind and backlight in the shader |
+| `src/tree/treeMesh.js` | All branches as one mesh; growth, gnarling (twisted fluting, burls) and bark ageing run in the shader |
+| `src/tree/leafFall.js` | Falling dead leaves and leaf litter that builds up under the crown and rots away |
+| `src/tree/leaves.js` | Veined leaves on young shoots, leafy spray cards for the living crown (more species, more foliage), seed leaves; wind and backlight in the shader |
 | `src/tree/barkTexture.js` | Procedural tileable bark colour and bump maps |
 | `src/scene.js` | Renderer, sky dome with sun glow, sun and shadows, ground, fog |
 | `src/wind.js` | Wind sway shared by wood and leaf shaders |

@@ -1,4 +1,5 @@
-// Leaves on young shoots, and the two seed leaves (cotyledons) of the seedling.
+// Leaves on young shoots, leafy sprays that make up the living crown, and
+// the two seed leaves (cotyledons) of the seedling.
 // Leaves sit along every branch. Each one unfolds just behind the growing
 // tip, stays while the shoot is young, then yellows and falls once the
 // wood behind it turns to bark. So the green always rides on the fresh growth.
@@ -17,7 +18,8 @@ export const leafLight = {
 const LEAF_SPACING = 0.11; // world units between leaves along a shoot
 const LEAF_LIFE = 0.14; // depth units a leaf lives
 const UNFOLD = 0.006; // depth units to unfold
-const TUFT = 8; // leaves around each growing tip
+const TUFT = 8;
+const SPRAY_REACH = 0.03; // depth behind a growing tip that carries sprays // leaves around each growing tip
 const COTYLEDON_HEIGHT = 0.32; // world units up the seedling stem
 
 const FRESH = new THREE.Color('#79c043');
@@ -27,7 +29,8 @@ const SEED_LEAF = new THREE.Color('#9acb5a');
 
 export function createLeaves(branches) {
   const slots = [];
-  for (const br of branches) {
+  const shoots = branches.filter((br) => !br.isRoot);
+  for (const br of shoots) {
     const rand = createRandom(`${br.node.id}-leaves`);
     const count = Math.floor(br.length / LEAF_SPACING);
     for (let k = 0; k < count; k++) {
@@ -49,7 +52,7 @@ export function createLeaves(branches) {
 
   // A tuft of young leaves riding on every growing tip.
   const tufts = [];
-  for (const br of branches) {
+  for (const br of shoots) {
     const rand = createRandom(`${br.node.id}-tuft`);
     for (let k = 0; k < TUFT; k++) {
       tufts.push({
@@ -63,13 +66,34 @@ export function createLeaves(branches) {
     }
   }
 
+  // Leafy sprays: each card is a twig with many leaves, so the crown can
+  // be dense without drawing every leaf. More species, more foliage.
+  const sprays = [];
+  for (const br of shoots) {
+    const rand = createRandom(`${br.node.id}-sprays`);
+    const richness = Math.log10((br.node.species ?? 1) + 1);
+    const count = Math.round(THREE.MathUtils.clamp(5 + richness * 3, 5, 22));
+    for (let k = 0; k < count; k++) {
+      sprays.push({
+        branch: br,
+        lag: (rand() ** 1.5) * SPRAY_REACH,
+        angle: rand.range(0, Math.PI * 2),
+        tilt: rand.range(0.35, 1.25),
+        size: rand.range(0.55, 0.95) * (0.85 + 0.12 * richness),
+        hue: rand.range(-0.04, 0.03),
+        light: rand.range(-0.06, 0.05),
+        wasVisible: false,
+      });
+    }
+  }
+
   // Two seed leaves, opposite each other, low on the first stem.
   const root = branches[0];
   const cotyledonDepth = root.depths[0] + (COTYLEDON_HEIGHT / TREE_HEIGHT);
   const ci = Math.round((COTYLEDON_HEIGHT / root.length) * (root.points.length - 1));
   const cotyledons = [0, Math.PI].map((angle) => ({ branch: root, i: ci, t: 0, depth: cotyledonDepth, angle: angle + 0.6, size: 0.15 }));
 
-  const { material: leafMaterial, depthMaterial } = createLeafMaterial();
+  const { material: leafMaterial, depthMaterial } = createLeafMaterial(createLeafTexture());
   const leaves = new THREE.InstancedMesh(createLeafGeometry(), leafMaterial, slots.length + tufts.length);
   const seedLeaves = new THREE.InstancedMesh(createSeedLeafGeometry(), leafMaterial, 2);
   for (const m of [leaves, seedLeaves]) {
@@ -82,8 +106,18 @@ export function createLeaves(branches) {
     m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     m.setColorAt(0, FRESH);
   }
+  const sprayMat = createLeafMaterial(createSprayTexture(), { alphaTest: 0.45 });
+  const sprayMesh = new THREE.InstancedMesh(createSprayGeometry(), sprayMat.material, sprays.length);
+  sprayMesh.geometry.setAttribute('aAge', new THREE.InstancedBufferAttribute(new Float32Array(sprays.length), 1).setUsage(THREE.DynamicDrawUsage));
+  sprayMesh.customDepthMaterial = sprayMat.depthMaterial;
+  sprayMesh.castShadow = true;
+  sprayMesh.receiveShadow = true;
+  sprayMesh.frustumCulled = false;
+  sprayMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  sprayMesh.setColorAt(0, MATURE);
+
   const group = new THREE.Group();
-  group.add(leaves, seedLeaves);
+  group.add(leaves, seedLeaves, sprayMesh);
 
   // Scratch objects.
   const p = new THREE.Vector3();
@@ -125,10 +159,18 @@ export function createLeaves(branches) {
   }
 
   let slotAge = 0;
-  function update(now) {
+  let prevNow = 0;
+  const dying = []; // world positions of leaves that just reached the end of their life
+  function update(now, dt = 0) {
+    dying.length = 0;
+    const forward = now > prevNow && now - prevNow < 0.01;
     for (let k = 0; k < slots.length; k++) {
       const s = slots[k];
       const age = now - s.depth;
+      if (forward && age > LEAF_LIFE * 0.9 && prevNow - s.depth <= LEAF_LIFE * 0.9) {
+        leaves.getMatrixAt(k, m4);
+        dying.push(new THREE.Vector3().setFromMatrixPosition(m4));
+      }
       if (age <= 0 || age > LEAF_LIFE) {
         leaves.setMatrixAt(k, hidden);
         continue;
@@ -163,6 +205,42 @@ export function createLeaves(branches) {
     }
     leaves.instanceMatrix.needsUpdate = true;
     leaves.geometry.attributes.aAge.needsUpdate = true;
+
+    for (let k = 0; k < sprays.length; k++) {
+      const s = sprays[k];
+      const br = s.branch;
+      const d0 = br.depths[0];
+      const d1 = br.depths.at(-1);
+      const living = !br.node.children.length && !br.node.endMa;
+      const depth = Math.min(now, d1) - s.lag * Math.min(1, (d1 - d0) / SPRAY_REACH);
+      const visible = now > d0 && depth > d0 && (now <= d1 + 1e-6 || living);
+      if (!visible) {
+        // A spray left behind when its shoot forked drops its leaves.
+        if (s.wasVisible && forward) {
+          sprayMesh.getMatrixAt(k, m4);
+          const at = new THREE.Vector3().setFromMatrixPosition(m4);
+          for (let j = 0; j < 3; j++) dying.push(at.clone().add(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.4, Math.random() - 0.5).multiplyScalar(s.size)));
+        }
+        s.wasVisible = false;
+        sprayMesh.setMatrixAt(k, hidden);
+        continue;
+      }
+      const f = ((depth - d0) / (d1 - d0)) * (br.points.length - 1);
+      const i = Math.min(br.points.length - 2, Math.floor(f));
+      slotAge = now - depth;
+      const open = smooth(0, 0.01, now - d0);
+      place(sprayMesh, k, { branch: br, i, t: f - i, angle: s.angle, tilt: s.tilt }, open, s.size * (0.2 + 0.8 * open));
+      sprayMesh.setColorAt(k, color.copy(MATURE).lerp(FRESH, 0.35 + s.light * 3).offsetHSL(s.hue, 0, s.light));
+      // Now and then a leaf lets go.
+      if (s.wasVisible && Math.random() < dt * 0.012) {
+        sprayMesh.getMatrixAt(k, m4);
+        dying.push(new THREE.Vector3().setFromMatrixPosition(m4).add(new THREE.Vector3(0, s.size * 0.5, 0)));
+      }
+      s.wasVisible = true;
+    }
+    sprayMesh.instanceMatrix.needsUpdate = true;
+    sprayMesh.geometry.attributes.aAge.needsUpdate = true;
+    if (sprayMesh.instanceColor) sprayMesh.instanceColor.needsUpdate = true;
     if (leaves.instanceColor) leaves.instanceColor.needsUpdate = true;
 
     cotyledons.forEach((c, k) => {
@@ -179,10 +257,11 @@ export function createLeaves(branches) {
     });
     seedLeaves.instanceMatrix.needsUpdate = true;
     seedLeaves.geometry.attributes.aAge.needsUpdate = true;
+    prevNow = now;
     if (seedLeaves.instanceColor) seedLeaves.instanceColor.needsUpdate = true;
   }
 
-  return { group, update };
+  return { group, update, dying };
 }
 
 /** A pointed leaf along +Y, slightly cupped and drooping at the tip. */
@@ -283,9 +362,11 @@ mvPosition = modelViewMatrix * mvPosition;
 gl_Position = projectionMatrix * mvPosition;
 `;
 
-function createLeafMaterial() {
+/** Leaf material: shared wind, sunlight through the blade, faint glow. */
+export function createLeafMaterial(map, { alphaTest = 0 } = {}) {
   const material = new THREE.MeshStandardMaterial({
-    map: createLeafTexture(),
+    map,
+    alphaTest,
     side: THREE.DoubleSide,
     roughness: 0.55,
     metalness: 0,
@@ -304,10 +385,77 @@ function createLeafMaterial() {
         totalEmissiveRadiance += diffuseColor.rgb * (uSunColor * through * 0.9 + 0.07);`,
       );
   };
-  const depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  const depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: alphaTest ? map : null, alphaTest });
   depthMaterial.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, windUniforms);
     shader.vertexShader = LEAF_VERTEX_HEADER + shader.vertexShader.replace('#include <project_vertex>', LEAF_PROJECT);
   };
   return { material, depthMaterial };
+}
+
+/** Two crossed cards, pivoting at the twig's base, for a spray of leaves. */
+function createSprayGeometry() {
+  const a = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0);
+  const b = a.clone().rotateY(Math.PI / 2);
+  const g = new THREE.BufferGeometry();
+  const pos = [...a.attributes.position.array, ...b.attributes.position.array];
+  const nor = [...a.attributes.normal.array, ...b.attributes.normal.array];
+  const uv = [...a.attributes.uv.array, ...b.attributes.uv.array];
+  const idx = [...a.index.array, ...[...b.index.array].map((i) => i + 4)];
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
+}
+
+/** A twig with a dozen overlapping leaves, drawn once into a texture. */
+function createSprayTexture() {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const rand = createRandom('spray-texture');
+  // Stem.
+  ctx.strokeStyle = 'rgb(120,110,90)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(128, 256);
+  ctx.quadraticCurveTo(118, 150, 132, 40);
+  ctx.stroke();
+  const leaf = (x, y, angle, len, shade) => {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    const w = len * 0.32;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.bezierCurveTo(w, -len * 0.2, w, -len * 0.7, 0, -len);
+    ctx.bezierCurveTo(-w, -len * 0.7, -w, -len * 0.2, 0, 0);
+    const g = ctx.createLinearGradient(-w, 0, w, 0);
+    g.addColorStop(0, `rgb(${shade - 40},${shade - 40},${shade - 40})`);
+    g.addColorStop(0.5, `rgb(${shade},${shade},${shade})`);
+    g.addColorStop(1, `rgb(${shade - 55},${shade - 55},${shade - 55})`);
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,240,0.5)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -len * 0.95);
+    ctx.stroke();
+    ctx.restore();
+  };
+  for (let k = 0; k < 14; k++) {
+    const t = 0.12 + (k / 14) * 0.85;
+    const y = 256 - t * 220;
+    const x = 128 + Math.sin(t * 3) * 6;
+    const side = k % 2 ? 1 : -1;
+    leaf(x, y, side * rand.range(0.6, 1.15), rand.range(52, 78) * (1.1 - t * 0.35), Math.round(rand.range(185, 250)));
+  }
+  leaf(132, 46, rand.range(-0.15, 0.15), 60, 240);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
 }

@@ -1,6 +1,7 @@
-// Step 2: a branching tree grown from a hand-made file of the human lineage.
+// A branching tree grown from a hand-made file of the human lineage.
 // It starts as a seedling with two seed leaves; young shoots are green and
-// leafy, and wood thickens and turns to bark as it ages.
+// leafy; wood thickens, barks and gnarls as it ages; dead leaves fall and
+// build up as litter under the crown.
 import * as THREE from 'three';
 import { loadTree, TIME_START_MA, TIME_END_MA } from './data.js';
 import { GrowthClock } from './clock.js';
@@ -11,6 +12,7 @@ import { createUI } from './ui.js';
 import { addPlaceholderForks, layoutTree, locate } from './tree/layout.js';
 import { createTreeMesh } from './tree/treeMesh.js';
 import { createLeaves, leafLight } from './tree/leaves.js';
+import { createLeafFall } from './tree/leafFall.js';
 import { windUniforms } from './wind.js';
 import { createBarkTextures } from './tree/barkTexture.js';
 
@@ -27,7 +29,8 @@ addPlaceholderForks(tree);
 const branches = layoutTree(tree);
 const treeMesh = createTreeMesh(branches, createBarkTextures());
 const leaves = createLeaves(branches);
-scene.add(treeMesh.mesh, leaves.group);
+const leafFall = createLeafFall(branches);
+scene.add(treeMesh.mesh, leaves.group, leafFall.group);
 
 // Depth grows at a steady visual pace; the counter shows real Ma.
 const clock = new GrowthClock({
@@ -104,7 +107,8 @@ function frame(time) {
   clock.update(dt);
   const now = depthAt(clock.ma);
   treeMesh.setDepth(now);
-  leaves.update(now);
+  leaves.update(now, dt);
+  leafFall.update(dt, now, leaves.dying);
 
   windUniforms.uTime.value = time / 1000;
 
@@ -127,4 +131,4 @@ function frame(time) {
 requestAnimationFrame(frame);
 
 // Handy from the browser console, e.g. treeOfLife.clock.ma = 600.
-window.treeOfLife = { clock, tree, branches, leaves, treeMesh };
+window.treeOfLife = { clock, tree, branches, leaves, treeMesh, camera };

@@ -46,9 +46,10 @@ export function createBarkTextures(size = 512, seed = 'bark') {
   const color = cctx.createImageData(size, size);
   const bump = bctx.createImageData(size, size);
 
-  const dark = [52, 38, 28];
-  const mid = [120, 96, 72];
-  const light = [178, 160, 136];
+  // Olive-like: grey-brown, with darker fissures.
+  const dark = [46, 40, 34];
+  const mid = [108, 100, 88];
+  const light = [170, 164, 150];
   const mix = (a, b, t) => a + (b - a) * t;
 
   for (let y = 0; y < size; y++) {

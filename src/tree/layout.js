@@ -14,7 +14,7 @@ import { depthAt, maAtDepth } from '../timeScale.js';
 
 export const TREE_HEIGHT = 16; // world units from seed to today along any path
 const STEP = 0.08; // centreline sample spacing (world units)
-const ROOT_RADIUS = 0.7;
+const ROOT_RADIUS = 0.85;
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -58,19 +58,22 @@ export function addPlaceholderForks(tree) {
 
 /**
  * @returns {object[]} branches, parents before children. Each has
- *   node, points[], tangents[], normals[], binormals[], depths[], radii[], dists[]
+ *   node, points[], tangents[], normals[], binormals[], depths[], radii[],
+ *   dists[] (along this branch) and paths[] (distance from the seed, continuous
+ *   across forks so bark twist and fluting run on without a seam).
+ * Roots (`isRoot`) come last; they carry no leaves.
  */
 export function layoutTree(tree) {
   const rootSpecies = tree.root.species;
   const branches = [];
 
-  const grow = (node, start, dir, phase) => {
+  const grow = (node, start, dir, phase, startNormal = null, startPath = 0, leader = true) => {
     const endMa = node.children.length ? node.children[0].splitMa : node.endMa ?? 0;
     const s0 = depthAt(node.splitMa);
     const s1 = depthAt(endMa);
     const length = Math.max(STEP, (s1 - s0) * TREE_HEIGHT);
     const rand = createRandom(node.id);
-    const branch = buildCenterline(node, start, dir, length, s0, s1, rand);
+    const branch = buildCenterline(node, start, dir, length, s0, s1, rand, startNormal, startPath);
     branch.node = node;
     node.branch = branch;
 
@@ -82,8 +85,11 @@ export function layoutTree(tree) {
       : rSelf * 0.7;
     branch.radii = branch.depths.map((_, i) => {
       const u = i / (branch.depths.length - 1);
-      const flare = node === tree.root ? 1 + 0.7 * Math.exp(-branch.dists[i] * 5) : 1;
-      return THREE.MathUtils.lerp(rSelf, rEnd, u) * flare;
+      const dist = branch.dists[i];
+      const flare = node === tree.root ? 1 + 0.9 * Math.exp(-dist * 3) : 1;
+      // A swollen collar where a side branch leaves its parent.
+      const collar = leader ? 1 : 1 + 0.35 * Math.exp(-dist * 4);
+      return THREE.MathUtils.lerp(rSelf, rEnd, u) * flare * collar;
     });
     branches.push(branch);
 
@@ -103,22 +109,61 @@ export function layoutTree(tree) {
       const side = n.clone().multiplyScalar(Math.cos(az)).addScaledVector(b, Math.sin(az));
       const childDir = endDir.clone().multiplyScalar(Math.cos(theta)).addScaledVector(side, Math.sin(theta)).normalize();
       if (childDir.y < 0.12) childDir.lerp(UP, 0.12 - childDir.y + 0.1).normalize();
-      grow(child, endPos.clone(), childDir, phase + GOLDEN * (k + 1));
+      grow(child, endPos.clone(), childDir, phase + GOLDEN * (k + 1), leader ? n : null, branch.paths.at(-1), leader);
     });
   };
 
-  grow(tree.root, new THREE.Vector3(0, -0.15, 0), UP.clone(), 0);
+  // The trunk leans a little, as old trees do.
+  const lean = createRandom('trunk-lean');
+  const trunkDir = new THREE.Vector3(lean.range(-0.18, 0.18), 1, lean.range(-0.18, 0.18)).normalize();
+  grow(tree.root, new THREE.Vector3(0, -0.15, 0), trunkDir, 0);
+  addRoots(branches, rootSpecies);
   return branches;
 }
 
-function buildCenterline(node, start, dir, length, s0, s1, rand) {
+/**
+ * Surface roots and buttresses: they spread from the base over the ground
+ * and grow all through the tree's life (a decorative part, not data).
+ */
+function addRoots(branches, rootSpecies) {
+  const count = 7;
+  const rand = createRandom('roots');
+  const trunkR = radiusFor(rootSpecies, rootSpecies);
+  for (let k = 0; k < count; k++) {
+    const az = (k / count) * Math.PI * 2 + rand.range(-0.35, 0.35);
+    const out = new THREE.Vector3(Math.cos(az), 0, Math.sin(az));
+    const node = { id: `root-${k}`, name: 'Root', children: [], parentNode: null, isRoot: true };
+    const length = rand.range(3.5, 7);
+    const s0 = 0.02 + k * 0.012;
+    const s1 = rand.range(0.8, 0.97);
+    const start = out.clone().multiplyScalar(trunkR * 0.25).setY(0.35);
+    const dir = out.clone().setY(-0.35).normalize();
+    const br = buildCenterline(node, start, dir, length, s0, s1, createRandom(node.id), null, 0, true);
+    // Hug the ground: dive from the buttress into the soil, then run just under the surface.
+    const r0 = trunkR * rand.range(0.38, 0.55);
+    br.radii = br.dists.map((d) => r0 * (0.12 + 0.88 * Math.exp(-d / (length * 0.45))));
+    br.points.forEach((p, i) => {
+      const d = br.dists[i];
+      p.y = Math.max(-br.radii[i] * 0.45, 0.35 * Math.exp(-d * 1.4) - br.radii[i] * 0.45);
+    });
+    br.node = node;
+    br.isRoot = true;
+    br.fin = 1.3; // buttress: taller than wide near the trunk
+    branches.push(br);
+  }
+}
+
+function buildCenterline(node, start, dir, length, s0, s1, rand, startNormal = null, startPath = 0, flat = false) {
   const count = Math.max(3, Math.ceil(length / STEP));
   const step = length / count;
   const points = [start.clone()];
   const tangents = [dir.clone().normalize()];
-  // Gentle, seeded wander plus a pull upward (branches curve toward the light).
-  const tropism = node.parentNode ? rand.range(0.05, 0.12) : 0.02;
-  const wander = rand.range(0.02, 0.05);
+  // Seeded wander, sudden kinks (old wood is gnarled), and a pull upward
+  // (branches curve toward the light).
+  const tropism = flat ? 0 : node.parentNode ? rand.range(0.03, 0.1) : 0.05;
+  const wander = rand.range(0.04, 0.08);
+  let nextKink = rand.range(0.4, 1.2);
+  const kinkAxis = new THREE.Vector3();
   const f1 = rand.range(0.4, 1.1);
   const f2 = rand.range(0.4, 1.1);
   const ph1 = rand.range(0, Math.PI * 2);
@@ -131,9 +176,17 @@ function buildCenterline(node, start, dir, length, s0, s1, rand) {
     tmpSide.crossVectors(d, Math.abs(d.y) < 0.95 ? UP : new THREE.Vector3(1, 0, 0)).normalize();
     tmpSide2.crossVectors(d, tmpSide).normalize();
     d.addScaledVector(UP, tropism * step)
-      .addScaledVector(tmpSide, Math.sin(t * f1 + ph1) * wander * step * 4)
-      .addScaledVector(tmpSide2, Math.sin(t * f2 + ph2) * wander * step * 4)
+      .addScaledVector(tmpSide, (Math.sin(t * f1 + ph1) + 0.5 * Math.sin(t * f1 * 3.1 + ph2)) * wander * step * 4)
+      .addScaledVector(tmpSide2, (Math.sin(t * f2 + ph2) + 0.5 * Math.sin(t * f2 * 2.7 + ph1)) * wander * step * 4)
       .normalize();
+    if (t >= nextKink) {
+      kinkAxis.copy(tmpSide).multiplyScalar(rand.range(-1, 1)).addScaledVector(tmpSide2, rand.range(-1, 1)).normalize();
+      d.applyAxisAngle(kinkAxis, rand.range(0.1, 0.28));
+      if (flat) d.y = Math.min(d.y, 0);
+      d.normalize();
+      nextKink = t + rand.range(0.5, 1.4);
+    }
+    if (!flat && d.y < 0.05) d.lerp(UP, 0.1).normalize();
     points.push(points[i - 1].clone().addScaledVector(d, step));
     tangents.push(d.clone());
   }
@@ -142,7 +195,10 @@ function buildCenterline(node, start, dir, length, s0, s1, rand) {
   const normals = [];
   const binormals = [];
   const first = tangents[0];
-  const n0 = new THREE.Vector3().crossVectors(first, Math.abs(first.y) < 0.95 ? UP : new THREE.Vector3(1, 0, 0)).normalize();
+  // Carry the parent's frame into a leader so the bark pattern lines up.
+  const n0 = startNormal
+    ? startNormal.clone().addScaledVector(first, -startNormal.dot(first)).normalize()
+    : new THREE.Vector3().crossVectors(first, Math.abs(first.y) < 0.95 ? UP : new THREE.Vector3(1, 0, 0)).normalize();
   normals.push(n0);
   const q = new THREE.Quaternion();
   for (let i = 1; i <= count; i++) {
@@ -153,11 +209,13 @@ function buildCenterline(node, start, dir, length, s0, s1, rand) {
 
   const depths = [];
   const dists = [];
+  const paths = [];
   for (let i = 0; i <= count; i++) {
     depths.push(s0 + ((s1 - s0) * i) / count);
     dists.push(i * step);
+    paths.push(startPath + i * step);
   }
-  return { points, tangents, normals, binormals, depths, dists, length };
+  return { points, tangents, normals, binormals, depths, dists, paths, length };
 }
 
 /** Index and fraction of the centreline sample at a given depth (clamped). */
