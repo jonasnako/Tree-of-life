@@ -2,9 +2,11 @@
 // every vertex knows its centreline point, its outward direction, its full
 // radius and its depth, and the shader works out from the current depth
 // (uNow) how thick it is (0 = not grown yet), and whether it is a green
-// shoot, a young twig or barked wood.
+// shoot, a young twig or barked wood. Old bark gets deeper, greyer and
+// mossy near the ground; young wood bends more in the wind.
 import * as THREE from 'three';
 import { GROWTH } from './growth.js';
+import { windUniforms, WIND_GLSL } from '../wind.js';
 
 export function createTreeMesh(branches, barkTextures) {
   const uniforms = {
@@ -19,6 +21,9 @@ export function createTreeMesh(branches, barkTextures) {
     uBark1: { value: GROWTH.bark1 },
     uShoot: { value: new THREE.Color('#7fb04a') },
     uTwigColor: { value: new THREE.Color('#7a5a3c') },
+    uWeathered: { value: new THREE.Color('#9b968a') },
+    uMoss: { value: new THREE.Color('#5d7a2c') },
+    ...windUniforms,
   };
 
   const geometry = buildGeometry(branches);
@@ -26,7 +31,7 @@ export function createTreeMesh(branches, barkTextures) {
   const material = new THREE.MeshStandardMaterial({
     map: barkTextures.map,
     bumpMap: barkTextures.bumpMap,
-    bumpScale: 4,
+    bumpScale: 5,
     roughness: 0.95,
     metalness: 0,
   });
@@ -40,7 +45,7 @@ export function createTreeMesh(branches, barkTextures) {
         .replace('#include <roughnessmap_fragment>', ROUGHNESS_FRAGMENT)
         .replace(
           '#include <bumpmap_pars_fragment>',
-          THREE.ShaderChunk.bumpmap_pars_fragment.replaceAll('bumpScale *', 'bumpScale * smoothstep(uBark0, uBark1, vAge) *'),
+          THREE.ShaderChunk.bumpmap_pars_fragment.replaceAll('bumpScale *', 'bumpScale * barkDepth(vAge) *'),
         );
   };
 
@@ -74,6 +79,8 @@ uniform float uSpan;
 uniform float uMinThick;
 uniform float uThickPow;
 varying float vAge;
+varying float vHeight;
+${WIND_GLSL}
 `;
 
 // position = centreline point, normal = outward direction.
@@ -83,7 +90,9 @@ float grown = step(0.0, age);
 float thick = uMinThick + (1.0 - uMinThick) * pow(smoothstep(0.0, uSpan, age), uThickPow);
 float tip = smoothstep(0.0, uTipLen, age);
 vec3 transformed = position + normal * (aRadius * thick * tip * grown);
+transformed += windSway(position, age);
 vAge = age;
+vHeight = position.y;
 `;
 
 const FRAGMENT_HEADER = /* glsl */ `
@@ -93,7 +102,14 @@ uniform float uBark0;
 uniform float uBark1;
 uniform vec3 uShoot;
 uniform vec3 uTwigColor;
+uniform vec3 uWeathered;
+uniform vec3 uMoss;
 varying float vAge;
+varying float vHeight;
+// Bark relief: none on green shoots, deeper on old wood.
+float barkDepth(float age) {
+  return smoothstep(uBark0, uBark1, age) * (1.0 + 0.8 * smoothstep(0.3, 0.9, age));
+}
 `;
 
 // Green shoot -> brown twig -> bark texture.
@@ -102,7 +118,17 @@ float barkMix = smoothstep(uBark0, uBark1, vAge);
 vec3 young = mix(uShoot, uTwigColor, smoothstep(uTwig0, uTwig1, vAge));
 #ifdef USE_MAP
   vec4 barkTexel = texture2D(map, vMapUv);
-  diffuseColor.rgb *= mix(young, barkTexel.rgb, barkMix);
+  vec3 bark = barkTexel.rgb;
+  // Old wood weathers to silver-grey on the ridges.
+  float ridge = barkTexel.r * 2.2;
+  bark = mix(bark, uWeathered * ridge, 0.35 * smoothstep(0.35, 0.95, vAge));
+  #ifdef USE_BUMPMAP
+    // Moss settles in the furrows low on old wood.
+    float furrow = 1.0 - texture2D(bumpMap, vBumpMapUv).x;
+    float moss = (1.0 - smoothstep(0.1, 1.6, vHeight)) * smoothstep(0.25, 0.6, vAge) * smoothstep(0.35, 0.75, furrow);
+    bark = mix(bark, uMoss * (0.7 + 0.6 * ridge), moss * 0.8);
+  #endif
+  diffuseColor.rgb *= mix(young, bark, barkMix);
 #else
   diffuseColor.rgb *= young;
 #endif

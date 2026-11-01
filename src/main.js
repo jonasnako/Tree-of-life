@@ -10,13 +10,14 @@ import { createCamera } from './camera.js';
 import { createUI } from './ui.js';
 import { addPlaceholderForks, layoutTree, locate } from './tree/layout.js';
 import { createTreeMesh } from './tree/treeMesh.js';
-import { createLeaves } from './tree/leaves.js';
+import { createLeaves, leafLight } from './tree/leaves.js';
+import { windUniforms } from './wind.js';
 import { createBarkTextures } from './tree/barkTexture.js';
 
 const RUN_SECONDS = 60; // seed to today at 1×
 
 const canvas = document.getElementById('scene');
-const { renderer, scene, sun } = createScene(canvas);
+const { renderer, scene, sun, sky } = createScene(canvas);
 const { camera, update: updateCamera } = createCamera(canvas);
 handleResize(renderer, camera);
 
@@ -80,6 +81,20 @@ function fitShadows() {
   sun.position.copy(sphere.center).addScaledVector(sunDir, r * 2 + 20);
 }
 
+// A label on the followed leaf once its lineage stands on its own.
+const focusLabel = document.getElementById('focus-label');
+focusLabel.querySelector('.focus-name').textContent = tree.focus.name;
+const labelPos = new THREE.Vector3();
+function placeFocusLabel() {
+  const show = clock.ma <= tree.focus.splitMa;
+  focusLabel.classList.toggle('show', show);
+  if (!show) return;
+  labelPos.copy(tip).project(camera);
+  const x = (labelPos.x * 0.5 + 0.5) * window.innerWidth;
+  const y = (-labelPos.y * 0.5 + 0.5) * window.innerHeight;
+  focusLabel.style.transform = `translate(${x}px, ${y}px)`;
+}
+
 let lastTime = null;
 function frame(time) {
   // Clamp so a background tab or a slow frame never jumps (or reverses) time.
@@ -91,12 +106,19 @@ function frame(time) {
   treeMesh.setDepth(now);
   leaves.update(now);
 
+  windUniforms.uTime.value = time / 1000;
+
   frameTree(now);
   fitShadows();
   updateCamera(dt, { center: sphere.center, radius: sphere.radius, tip, finished: clock.finished });
   const dist = camera.position.distanceTo(sphere.center);
   scene.fog.near = dist * 1.6 + 6;
   scene.fog.far = dist * 5 + 40;
+
+  sky.position.copy(camera.position);
+  camera.updateMatrixWorld();
+  leafLight.uSunView.value.copy(sunDir).transformDirection(camera.matrixWorldInverse);
+  placeFocusLabel();
 
   ui.update();
   renderer.render(scene, camera);
@@ -105,4 +127,4 @@ function frame(time) {
 requestAnimationFrame(frame);
 
 // Handy from the browser console, e.g. treeOfLife.clock.ma = 600.
-window.treeOfLife = { clock, tree };
+window.treeOfLife = { clock, tree, branches, leaves, treeMesh };

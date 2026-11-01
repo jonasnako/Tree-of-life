@@ -6,11 +6,18 @@ import * as THREE from 'three';
 import { createRandom } from '../random.js';
 import { thicknessAt, smooth } from './growth.js';
 import { TREE_HEIGHT } from './layout.js';
+import { windUniforms, WIND_GLSL } from '../wind.js';
 
-const LEAF_SPACING = 0.14; // world units between leaves along a shoot
-const LEAF_LIFE = 0.1; // depth units a leaf lives
+/** Shared with main.js, which keeps the sun direction (view space) current. */
+export const leafLight = {
+  uSunView: { value: new THREE.Vector3(0, 1, 0) },
+  uSunColor: { value: new THREE.Color('#ffd9a0') },
+};
+
+const LEAF_SPACING = 0.11; // world units between leaves along a shoot
+const LEAF_LIFE = 0.14; // depth units a leaf lives
 const UNFOLD = 0.006; // depth units to unfold
-const TUFT = 5; // leaves around each growing tip
+const TUFT = 8; // leaves around each growing tip
 const COTYLEDON_HEIGHT = 0.32; // world units up the seedling stem
 
 const FRESH = new THREE.Color('#79c043');
@@ -62,10 +69,13 @@ export function createLeaves(branches) {
   const ci = Math.round((COTYLEDON_HEIGHT / root.length) * (root.points.length - 1));
   const cotyledons = [0, Math.PI].map((angle) => ({ branch: root, i: ci, t: 0, depth: cotyledonDepth, angle: angle + 0.6, size: 0.15 }));
 
-  const leafMaterial = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.6, metalness: 0 });
+  const { material: leafMaterial, depthMaterial } = createLeafMaterial();
   const leaves = new THREE.InstancedMesh(createLeafGeometry(), leafMaterial, slots.length + tufts.length);
   const seedLeaves = new THREE.InstancedMesh(createSeedLeafGeometry(), leafMaterial, 2);
   for (const m of [leaves, seedLeaves]) {
+    // Age of the wood each leaf hangs on, so the wind moves leaf and twig together.
+    m.geometry.setAttribute('aAge', new THREE.InstancedBufferAttribute(new Float32Array(m.count), 1).setUsage(THREE.DynamicDrawUsage));
+    m.customDepthMaterial = depthMaterial;
     m.castShadow = true;
     m.receiveShadow = true;
     m.frustumCulled = false;
@@ -111,6 +121,7 @@ export function createLeaves(branches) {
     p.lerpVectors(br.points[i], br.points[i + 1], t).addScaledVector(radial, r * 0.9);
     m4.setPosition(p);
     mesh.setMatrixAt(idx, m4);
+    mesh.geometry.attributes.aAge.array[idx] = slotAge;
   }
 
   let slotAge = 0;
@@ -151,6 +162,7 @@ export function createLeaves(branches) {
       leaves.setColorAt(idx, color.copy(FRESH).offsetHSL(s.hue, 0.02, 0.02));
     }
     leaves.instanceMatrix.needsUpdate = true;
+    leaves.geometry.attributes.aAge.needsUpdate = true;
     if (leaves.instanceColor) leaves.instanceColor.needsUpdate = true;
 
     cotyledons.forEach((c, k) => {
@@ -166,6 +178,7 @@ export function createLeaves(branches) {
       seedLeaves.setColorAt(k, color.copy(SEED_LEAF).lerp(AUTUMN, smooth(0.05, 0.08, age)));
     });
     seedLeaves.instanceMatrix.needsUpdate = true;
+    seedLeaves.geometry.attributes.aAge.needsUpdate = true;
     if (seedLeaves.instanceColor) seedLeaves.instanceColor.needsUpdate = true;
   }
 
@@ -179,6 +192,7 @@ function createLeafGeometry() {
   shape.bezierCurveTo(0.3, 0.2, 0.32, 0.65, 0, 1);
   shape.bezierCurveTo(-0.32, 0.65, -0.3, 0.2, 0, 0);
   const g = new THREE.ShapeGeometry(shape, 8);
+  setLeafUv(g, 0.7, 1);
   bend(g, 0.6, 0.25);
   return g;
 }
@@ -190,6 +204,7 @@ function createSeedLeafGeometry() {
   shape.bezierCurveTo(0.12, 0.05, 0.5, 0.35, 0, 0.9);
   shape.bezierCurveTo(-0.5, 0.35, -0.12, 0.05, 0, 0);
   const g = new THREE.ShapeGeometry(shape, 8);
+  setLeafUv(g, 1.0, 0.9);
   bend(g, 0.9, 0.1);
   return g;
 }
@@ -202,4 +217,97 @@ function bend(geometry, cup, droop) {
     pos.setZ(i, cup * x * x - droop * y * y);
   }
   geometry.computeVertexNormals();
+}
+
+function setLeafUv(geometry, width, length) {
+  const pos = geometry.attributes.position;
+  const uv = geometry.attributes.uv;
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, pos.getX(i) / width + 0.5, pos.getY(i) / length);
+}
+
+/** Pale veins on a white leaf; the instance colour tints it. */
+function createLeafTexture() {
+  const w = 128;
+  const h = 256;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, w, 0);
+  grad.addColorStop(0, '#b9b9b9');
+  grad.addColorStop(0.5, '#e6e6e6');
+  grad.addColorStop(1, '#b9b9b9');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = 'rgba(255,255,240,0.85)';
+  ctx.lineCap = 'round';
+  // Midrib.
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(w / 2, h);
+  ctx.lineTo(w / 2, 6);
+  ctx.stroke();
+  // Side veins, curving toward the tip.
+  ctx.lineWidth = 1.6;
+  for (let k = 1; k < 9; k++) {
+    const y = h - k * (h / 9.5);
+    for (const dir of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(w / 2, y);
+      ctx.quadraticCurveTo(w / 2 + dir * w * 0.22, y - 14, w / 2 + dir * w * 0.42, y - 34);
+      ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+const LEAF_VERTEX_HEADER = /* glsl */ `
+attribute float aAge;
+${WIND_GLSL}
+`;
+
+// Instancing first, then the same wind as the wood, plus a quick flutter.
+const LEAF_PROJECT = /* glsl */ `
+vec4 mvPosition = vec4(transformed, 1.0);
+#ifdef USE_INSTANCING
+  mvPosition = instanceMatrix * mvPosition;
+  vec3 anchor = instanceMatrix[3].xyz;
+  mvPosition.xyz += windSway(anchor, aAge);
+  float flutter = sin(uTime * 4.0 + anchor.x * 3.1 + anchor.z * 2.3) * 0.04 * uWind;
+  mvPosition.y += flutter * transformed.y;
+#endif
+mvPosition = modelViewMatrix * mvPosition;
+gl_Position = projectionMatrix * mvPosition;
+`;
+
+function createLeafMaterial() {
+  const material = new THREE.MeshStandardMaterial({
+    map: createLeafTexture(),
+    side: THREE.DoubleSide,
+    roughness: 0.55,
+    metalness: 0,
+  });
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, windUniforms, leafLight);
+    shader.vertexShader = LEAF_VERTEX_HEADER + shader.vertexShader.replace('#include <project_vertex>', LEAF_PROJECT);
+    shader.fragmentShader =
+      'uniform vec3 uSunView;\nuniform vec3 uSunColor;\n' +
+      shader.fragmentShader.replace(
+        '#include <emissivemap_fragment>',
+        /* glsl */ `#include <emissivemap_fragment>
+        // Sunlight shining through the leaf when you look toward the sun,
+        // plus a faint glow so fresh leaves never go dull in shade.
+        float through = pow(max(dot(normalize(vViewPosition), -uSunView), 0.0), 3.0);
+        totalEmissiveRadiance += diffuseColor.rgb * (uSunColor * through * 0.9 + 0.07);`,
+      );
+  };
+  const depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  depthMaterial.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, windUniforms);
+    shader.vertexShader = LEAF_VERTEX_HEADER + shader.vertexShader.replace('#include <project_vertex>', LEAF_PROJECT);
+  };
+  return { material, depthMaterial };
 }

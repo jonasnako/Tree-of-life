@@ -1,12 +1,13 @@
-// Orbit camera that frames the growing tree.
-// During growth it keeps the whole tree in view while leaning toward the
-// tip of the followed lineage; when time reaches today it pulls back to the
-// whole tree. While you drag or zoom it hands control to you, then eases
-// back after a pause.
+// Orbit camera. During replay it follows the growing tip of the followed
+// lineage, close enough to watch the forks, and drifts slowly around the
+// tree. When time reaches today it pulls back to show the whole tree.
+// While you drag or zoom it hands control to you, then eases back after a pause.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+const UP = new THREE.Vector3(0, 1, 0);
 const RESUME_AFTER = 4; // seconds of no input before auto-framing resumes
+const ORBIT_SPEED = 0.06; // radians per second of slow drift around the tree
 
 export function createCamera(canvas) {
   const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.05, 500);
@@ -37,11 +38,18 @@ export function createCamera(canvas) {
   function update(dt, view) {
     if (!interacting) idle += dt;
     if (!interacting && idle > RESUME_AFTER) {
-      const k = 1 - Math.exp(-dt * (view.finished ? 0.8 : 1.6));
-      const lean = view.finished ? 0 : 0.45;
-      desiredTarget.lerpVectors(view.center, view.tip, lean);
+      const k = 1 - Math.exp(-dt * (view.finished ? 0.7 : 1.6));
       const fit = view.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.min(1, camera.aspect);
-      const desiredDistance = THREE.MathUtils.clamp(0.4 + fit * (view.finished ? 1.25 : 0.95), 0.9, 110);
+      let desiredDistance;
+      if (view.finished) {
+        desiredTarget.copy(view.center);
+        desiredDistance = fit * 1.0;
+      } else {
+        // Close on the tip while the tree is small, then a little wider.
+        desiredTarget.lerpVectors(view.tip, view.center, 0.3);
+        desiredDistance = 0.6 + fit * 0.55;
+      }
+      desiredDistance = THREE.MathUtils.clamp(desiredDistance, 0.9, 110);
 
       before.copy(controls.target);
       controls.target.lerp(desiredTarget, k);
@@ -50,6 +58,7 @@ export function createCamera(canvas) {
       offset.subVectors(camera.position, controls.target);
       const dist = offset.length();
       offset.setLength(dist + (desiredDistance - dist) * k);
+      offset.applyAxisAngle(UP, ORBIT_SPEED * dt);
       camera.position.copy(controls.target).add(offset);
     }
     controls.update();

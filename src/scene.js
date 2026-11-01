@@ -1,8 +1,9 @@
 // Renderer, sky, light and ground: soft, warm, natural.
 import * as THREE from 'three';
 
-const SKY_TOP = '#9fbfd6';
-const HORIZON = '#e7e2cf';
+const SKY_TOP = '#6c9fd2';
+const HORIZON = '#ece3c8';
+const SUN_COLOR = '#ffd9a0';
 
 export function createScene(canvas) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -14,15 +15,16 @@ export function createScene(canvas) {
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
-  scene.background = skyTexture();
+  const sky = createSky();
+  scene.add(sky);
   scene.fog = new THREE.Fog(HORIZON, 22, 95);
 
   // Soft sky light from above, earthy bounce from below.
-  scene.add(new THREE.HemisphereLight('#dfeaf5', '#5a4a36', 1.1));
+  scene.add(new THREE.HemisphereLight('#d6e4f2', '#6a583c', 1.0));
 
-  // Warm, low-ish sun with soft shadows.
-  const sun = new THREE.DirectionalLight('#ffe0b0', 2.6);
-  sun.position.set(14, 22, 9);
+  // Warm afternoon sun with soft shadows.
+  const sun = new THREE.DirectionalLight(SUN_COLOR, 3.0);
+  sun.position.set(18, 15, 8);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.left = -14;
@@ -33,29 +35,56 @@ export function createScene(canvas) {
   sun.shadow.camera.far = 70;
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.03;
-  sun.shadow.radius = 4;
+  sun.shadow.radius = 5;
+  sky.material.uniforms.uSunDir.value.copy(sun.position).normalize();
   sun.target.position.set(0, 4, 0);
   scene.add(sun, sun.target);
 
   scene.add(createGround());
 
-  return { renderer, scene, sun };
+  return { renderer, scene, sun, sky };
 }
 
-function skyTexture() {
-  const c = document.createElement('canvas');
-  c.width = 2;
-  c.height = 256;
-  const ctx = c.getContext('2d');
-  const grad = ctx.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0, SKY_TOP);
-  grad.addColorStop(0.62, HORIZON);
-  grad.addColorStop(1, HORIZON);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 2, 256);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+/** Sky dome: blue overhead, warm haze at the horizon, a soft glow around the sun. */
+function createSky() {
+  const material = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+    toneMapped: false,
+    uniforms: {
+      uTop: { value: new THREE.Color(SKY_TOP) },
+      uHorizon: { value: new THREE.Color(HORIZON) },
+      uSun: { value: new THREE.Color(SUN_COLOR) },
+      uSunDir: { value: new THREE.Vector3(0, 1, 0) },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        gl_Position = p.xyww; // always at the far plane
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uTop;
+      uniform vec3 uHorizon;
+      uniform vec3 uSun;
+      uniform vec3 uSunDir;
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        float h = max(d.y, 0.0);
+        vec3 col = mix(uHorizon, uTop, smoothstep(0.0, 0.25, h));
+        float s = max(dot(d, uSunDir), 0.0);
+        col += uSun * (pow(s, 24.0) * 0.18 + pow(s, 400.0) * 0.8);
+        gl_FragColor = vec4(col, 1.0);
+        #include <colorspace_fragment>
+      }`,
+  });
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 16), material);
+  sky.frustumCulled = false;
+  sky.renderOrder = -1;
+  return sky;
 }
 
 function createGround() {
@@ -64,9 +93,9 @@ function createGround() {
   c.width = c.height = 512;
   const ctx = c.getContext('2d');
   const grad = ctx.createRadialGradient(256, 256, 0, 256, 256, 256);
-  grad.addColorStop(0, '#4f5a2e');
-  grad.addColorStop(0.25, '#6b7340');
-  grad.addColorStop(1, '#a9a77c');
+  grad.addColorStop(0, '#55602f');
+  grad.addColorStop(0.25, '#76803f');
+  grad.addColorStop(1, '#b7b47e');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 512, 512);
   // Speckle so it doesn't read as plastic.

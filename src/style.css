@@ -80,6 +80,40 @@ html, body {
   .event.show { transition: none; }
 }
 
+.focus-label {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  will-change: transform;
+}
+.focus-label.show { opacity: 1; }
+.focus-dot {
+  position: absolute;
+  left: -5px;
+  top: -5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fffbe8;
+  box-shadow: 0 0 0 1px rgba(43, 42, 34, 0.35), 0 0 12px rgba(255, 240, 190, 0.9);
+}
+.focus-name {
+  position: absolute;
+  left: 12px;
+  top: -30px;
+  padding: 3px 9px;
+  white-space: nowrap;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font-size: 14px;
+}
+
 .controls {
   position: fixed;
   left: 50%;

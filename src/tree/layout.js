@@ -14,7 +14,7 @@ import { depthAt, maAtDepth } from '../timeScale.js';
 
 export const TREE_HEIGHT = 16; // world units from seed to today along any path
 const STEP = 0.08; // centreline sample spacing (world units)
-const ROOT_RADIUS = 0.55;
+const ROOT_RADIUS = 0.7;
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const UP = new THREE.Vector3(0, 1, 0);
 
