@@ -1,52 +1,72 @@
-// A branching tree grown from a hand-made file of the human lineage.
+// The Tree of Life grown from real data (Open Tree of Life + TimeTree):
+// the lineages of a few showcase species, forking on their real dates.
 // It starts as a seedling with two seed leaves; young shoots are green and
 // leafy; wood thickens, barks and gnarls as it ages; dead leaves fall and
 // build up as litter under the crown.
 import * as THREE from 'three';
-import { loadTree, TIME_START_MA, TIME_END_MA } from './data.js';
+import { loadTree, setFocus, TIME_END_MA } from './data.js';
 import { GrowthClock } from './clock.js';
-import { depthAt, depthPerMa } from './timeScale.js';
+import { depthAt, depthPerMa, setOrigin } from './timeScale.js';
 import { createScene, handleResize } from './scene.js';
 import { createCamera } from './camera.js';
 import { createUI } from './ui.js';
 import { addPlaceholderForks, layoutTree, locate } from './tree/layout.js';
 import { createTreeMesh } from './tree/treeMesh.js';
 import { createLeaves, leafLight } from './tree/leaves.js';
+import { createBranchTexture } from './tree/branchTexture.js';
 import { createLeafFall } from './tree/leafFall.js';
 import { windUniforms } from './wind.js';
-import { createBarkTextures } from './tree/barkTexture.js';
 
 const RUN_SECONDS = 60; // seed to today at 1×
 
 const canvas = document.getElementById('scene');
 const { renderer, scene, sun, sky } = createScene(canvas);
-const { camera, update: updateCamera } = createCamera(canvas);
+const { camera, controls, update: updateCamera } = createCamera(canvas);
 handleResize(renderer, camera);
 
 // Data -> layout -> meshes.
 const tree = loadTree();
+setOrigin(tree.originMa);
 addPlaceholderForks(tree);
 const branches = layoutTree(tree);
-const treeMesh = createTreeMesh(branches, createBarkTextures());
-const leaves = createLeaves(branches);
+const treeMesh = createTreeMesh(branches);
+const branchTex = createBranchTexture(branches);
+const leaves = createLeaves(branches, branchTex);
 const leafFall = createLeafFall(branches);
 scene.add(treeMesh.mesh, leaves.group, leafFall.group);
 
 // Depth grows at a steady visual pace; the counter shows real Ma.
 const clock = new GrowthClock({
-  startMa: TIME_START_MA,
+  startMa: tree.originMa,
   endMa: TIME_END_MA,
   rateAt: (ma) => 1 / RUN_SECONDS / depthPerMa(ma),
 });
 
 // Captions for each fork on the followed lineage.
-const events = [];
-for (let i = 1; i < tree.lineage.length; i++) {
-  const node = tree.lineage[i];
-  const sisters = node.parentNode.children.filter((c) => c !== node && !c.placeholder);
-  events.push({ ma: node.splitMa, text: `${sisters.map((s) => s.name).join(', ')} branch off` });
+const displayName = (n) => (n.common ? `${n.common} (${n.name})` : n.name);
+function lineageEvents() {
+  const events = [];
+  for (let i = 1; i < tree.lineage.length; i++) {
+    const node = tree.lineage[i];
+    const sisters = node.parentNode.children.filter((c) => c !== node && !c.placeholder);
+    if (!sisters.length) continue;
+    const names = sisters.slice(0, 3).map(displayName);
+    const more = sisters.length > 3 ? ` and ${sisters.length - 3} more` : '';
+    events.push({ ma: node.splitMa, text: `${names.join(', ')}${more} branch off` });
+  }
+  return events;
 }
-const ui = createUI(clock, events);
+const ui = createUI(clock, lineageEvents());
+
+// Pick whose lineage to follow; the replay starts again from the seed.
+const focusSelect = document.getElementById('focus');
+for (const s of tree.showcase) focusSelect.add(new Option(s.label, s.key, false, s.node === tree.focus));
+focusSelect.addEventListener('change', () => {
+  setFocus(tree, focusSelect.value);
+  ui.setEvents(lineageEvents());
+  focusLabel.querySelector('.focus-name').textContent = `${tree.focusLabel} · ${tree.focus.name}`;
+  clock.restart();
+});
 
 // Framing helpers.
 const tip = new THREE.Vector3();
@@ -86,7 +106,7 @@ function fitShadows() {
 
 // A label on the followed leaf once its lineage stands on its own.
 const focusLabel = document.getElementById('focus-label');
-focusLabel.querySelector('.focus-name').textContent = tree.focus.name;
+focusLabel.querySelector('.focus-name').textContent = `${tree.focusLabel} · ${tree.focus.name}`;
 const labelPos = new THREE.Vector3();
 function placeFocusLabel() {
   const show = clock.ma <= tree.focus.splitMa;
@@ -122,6 +142,7 @@ function frame(time) {
   sky.position.copy(camera.position);
   camera.updateMatrixWorld();
   leafLight.uSunView.value.copy(sunDir).transformDirection(camera.matrixWorldInverse);
+  leafLight.uCrown.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
   placeFocusLabel();
 
   ui.update();
@@ -131,4 +152,4 @@ function frame(time) {
 requestAnimationFrame(frame);
 
 // Handy from the browser console, e.g. treeOfLife.clock.ma = 600.
-window.treeOfLife = { clock, tree, branches, leaves, treeMesh, camera };
+window.treeOfLife = { clock, tree, branches, leaves, treeMesh, camera, controls };

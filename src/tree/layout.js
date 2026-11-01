@@ -13,8 +13,14 @@ import { createRandom } from '../random.js';
 import { depthAt, maAtDepth } from '../timeScale.js';
 
 export const TREE_HEIGHT = 16; // world units from seed to today along any path
-const STEP = 0.08; // centreline sample spacing (world units)
-const ROOT_RADIUS = 0.85;
+const STEP = 0.11; // centreline sample spacing (world units)
+const ROOT_RADIUS = 1.1;
+// Long wood must be thick enough to hold itself up ("elastic similarity"):
+// a branch is at least this share of the length still to grow above it.
+const MIN_SLENDERNESS = 1 / 45;
+// Life's first fork is very early, so the trunk would be a stub. A mother
+// tree stands on a tall bole: the first segment gets at least this length.
+const TRUNK_MIN = 3.4;
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -23,15 +29,28 @@ export function radiusFor(species, rootSpecies) {
   return ROOT_RADIUS * Math.pow(species / rootSpecies, 0.2);
 }
 
+/** Radius from descendant species (pipe model), but never too slender to stand. */
+function woodRadius(node, rootSpecies) {
+  const pipe = radiusFor(node.species, rootSpecies);
+  const reach = (1 - depthAt(node.splitMa)) * TREE_HEIGHT;
+  const parentPipe = node.parentNode ? radiusFor(node.parentNode.species, rootSpecies) : Infinity;
+  return Math.max(pipe, Math.min(reach * MIN_SLENDERNESS, parentPipe * 0.75));
+}
+
 /**
  * Collapsed clades (leaves with many species) get a few seeded stand-in
  * forks so they read as limbs with a crown rather than bare poles.
- * They are marked `placeholder` and will be replaced by real data in step 4.
+ * They are marked `placeholder`; real detail replaces them when the full
+ * tree is streamed in (build step 8).
  */
 export function addPlaceholderForks(tree) {
   const visit = (node) => {
     if (node.children.length) return node.children.forEach(visit);
-    const levels = Math.max(0, Math.min(4, Math.floor(Math.log10(node.species)) - 1));
+    // Rich clades fork more; so do long lone limbs, so they don't read as
+    // whips. Never more stand-in tips than the clade has species.
+    const byRichness = Math.floor(Math.log10(node.species)) - 2;
+    const byLength = Math.floor(((1 - depthAt(node.splitMa)) * TREE_HEIGHT) / 3.5);
+    const levels = Math.max(0, Math.min(3, Math.max(byRichness, byLength), Math.floor(Math.log2(node.species))));
     split(node, levels, createRandom(`${node.id}-placeholder`));
   };
   const split = (node, levels, rand) => {
@@ -45,6 +64,7 @@ export function addPlaceholderForks(tree) {
         name: node.name,
         splitMa: forkMa,
         species: Math.max(1, Math.round(node.species * share)),
+        endMa: node.endMa,
         placeholder: true,
         parentNode: node,
         children: [],
@@ -71,22 +91,22 @@ export function layoutTree(tree) {
     const endMa = node.children.length ? node.children[0].splitMa : node.endMa ?? 0;
     const s0 = depthAt(node.splitMa);
     const s1 = depthAt(endMa);
-    const length = Math.max(STEP, (s1 - s0) * TREE_HEIGHT);
+    const length = Math.max(node === tree.root ? TRUNK_MIN : STEP, (s1 - s0) * TREE_HEIGHT);
     const rand = createRandom(node.id);
-    const branch = buildCenterline(node, start, dir, length, s0, s1, rand, startNormal, startPath);
+    // Long side limbs sag under their weight, then turn up toward the light.
+    const sag = leader ? 0 : 0.14 * Math.min(1, length / 6);
+    const branch = buildCenterline(node, start, dir, length, s0, s1, rand, startNormal, startPath, false, sag);
     branch.node = node;
     node.branch = branch;
 
     // Radius: from this node's own pipe size at the base toward the biggest
     // child's at the end, so the leader continues without a step.
-    const rSelf = radiusFor(node.species, rootSpecies);
-    const rEnd = node.children.length
-      ? radiusFor(Math.max(...node.children.map((c) => c.species)), rootSpecies)
-      : rSelf * 0.7;
+    const rSelf = woodRadius(node, rootSpecies);
+    const rEnd = node.children.length ? Math.max(...node.children.map((c) => woodRadius(c, rootSpecies))) : rSelf * 0.7;
     branch.radii = branch.depths.map((_, i) => {
       const u = i / (branch.depths.length - 1);
       const dist = branch.dists[i];
-      const flare = node === tree.root ? 1 + 0.9 * Math.exp(-dist * 3) : 1;
+      const flare = node === tree.root ? 1 + 1.3 * Math.exp(-dist * 2.2) : 1;
       // A swollen collar where a side branch leaves its parent.
       const collar = leader ? 1 : 1 + 0.35 * Math.exp(-dist * 4);
       return THREE.MathUtils.lerp(rSelf, rEnd, u) * flare * collar;
@@ -126,34 +146,34 @@ export function layoutTree(tree) {
  * and grow all through the tree's life (a decorative part, not data).
  */
 function addRoots(branches, rootSpecies) {
-  const count = 7;
+  const count = 9;
   const rand = createRandom('roots');
   const trunkR = radiusFor(rootSpecies, rootSpecies);
   for (let k = 0; k < count; k++) {
     const az = (k / count) * Math.PI * 2 + rand.range(-0.35, 0.35);
     const out = new THREE.Vector3(Math.cos(az), 0, Math.sin(az));
     const node = { id: `root-${k}`, name: 'Root', children: [], parentNode: null, isRoot: true };
-    const length = rand.range(3.5, 7);
+    const length = rand.range(4, 9);
     const s0 = 0.02 + k * 0.012;
     const s1 = rand.range(0.8, 0.97);
-    const start = out.clone().multiplyScalar(trunkR * 0.25).setY(0.35);
+    const start = out.clone().multiplyScalar(trunkR * 0.3).setY(0.6);
     const dir = out.clone().setY(-0.35).normalize();
     const br = buildCenterline(node, start, dir, length, s0, s1, createRandom(node.id), null, 0, true);
     // Hug the ground: dive from the buttress into the soil, then run just under the surface.
-    const r0 = trunkR * rand.range(0.38, 0.55);
+    const r0 = trunkR * rand.range(0.4, 0.6);
     br.radii = br.dists.map((d) => r0 * (0.12 + 0.88 * Math.exp(-d / (length * 0.45))));
     br.points.forEach((p, i) => {
       const d = br.dists[i];
-      p.y = Math.max(-br.radii[i] * 0.45, 0.35 * Math.exp(-d * 1.4) - br.radii[i] * 0.45);
+      p.y = Math.max(-br.radii[i] * 0.45, 0.6 * Math.exp(-d * 1.1) - br.radii[i] * 0.45);
     });
     br.node = node;
     br.isRoot = true;
-    br.fin = 1.3; // buttress: taller than wide near the trunk
+    br.fin = 1.9; // buttress: taller than wide near the trunk
     branches.push(br);
   }
 }
 
-function buildCenterline(node, start, dir, length, s0, s1, rand, startNormal = null, startPath = 0, flat = false) {
+function buildCenterline(node, start, dir, length, s0, s1, rand, startNormal = null, startPath = 0, flat = false, sag = 0) {
   const count = Math.max(3, Math.ceil(length / STEP));
   const step = length / count;
   const points = [start.clone()];
@@ -175,7 +195,7 @@ function buildCenterline(node, start, dir, length, s0, s1, rand, startNormal = n
     const t = i * step;
     tmpSide.crossVectors(d, Math.abs(d.y) < 0.95 ? UP : new THREE.Vector3(1, 0, 0)).normalize();
     tmpSide2.crossVectors(d, tmpSide).normalize();
-    d.addScaledVector(UP, tropism * step)
+    d.addScaledVector(UP, (tropism - sag * (1 - t / length) + sag * 0.6 * (t / length) ** 2) * step)
       .addScaledVector(tmpSide, (Math.sin(t * f1 + ph1) + 0.5 * Math.sin(t * f1 * 3.1 + ph2)) * wander * step * 4)
       .addScaledVector(tmpSide2, (Math.sin(t * f2 + ph2) + 0.5 * Math.sin(t * f2 * 2.7 + ph1)) * wander * step * 4)
       .normalize();
@@ -186,7 +206,7 @@ function buildCenterline(node, start, dir, length, s0, s1, rand, startNormal = n
       d.normalize();
       nextKink = t + rand.range(0.5, 1.4);
     }
-    if (!flat && d.y < 0.05) d.lerp(UP, 0.1).normalize();
+    if (!flat && d.y < -0.15) d.lerp(UP, 0.1).normalize();
     points.push(points[i - 1].clone().addScaledVector(d, step));
     tangents.push(d.clone());
   }

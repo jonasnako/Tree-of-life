@@ -1,15 +1,20 @@
 // Maps real time (Ma) to "depth": how far along its path from the root a
-// point of the tree is, 0 at the seed (4,000 Ma) and 1 at today.
+// point of the tree is, 0 at the seed (the origin, about 4,350 Ma) and 1 at today.
 // Depth is part linear and part logarithmic, so the billions of years of
 // early life still make a trunk, while the last few million years (where
 // most of the human lineage's forks are) get enough room to be seen.
 // The clock also uses it: depth grows at a steady visual speed, so the
 // counter races through empty eons and slows down for recent forks.
 
-export const T0 = 4000;
+export let T0 = 4000; // the seed; set from the data file's origin
 const LINEAR = 0.55; // share of the linear part
 const C = 20; // Ma; smaller = more room for recent time
-const LN = Math.log(1 + T0 / C);
+let LN = Math.log(1 + T0 / C);
+
+export function setOrigin(ma) {
+  T0 = ma;
+  LN = Math.log(1 + T0 / C);
+}
 
 export function depthAt(ma) {
   const lin = (T0 - ma) / T0;

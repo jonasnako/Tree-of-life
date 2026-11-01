@@ -1,25 +1,34 @@
-// Leaves on young shoots, leafy sprays that make up the living crown, and
-// the two seed leaves (cotyledons) of the seedling.
-// Leaves sit along every branch. Each one unfolds just behind the growing
-// tip, stays while the shoot is young, then yellows and falls once the
-// wood behind it turns to bark. So the green always rides on the fresh growth.
+// Leaves, computed on the GPU.
+//
+// Every branch's centreline lives in one small float texture (see
+// branchTexture.js). A leaf is just a few static numbers: which branch, at
+// what depth (or how far behind the growing tip), angle, tilt, size. The
+// vertex shader looks the branch up, places and orients the leaf, unfolds
+// it, ages its colour and hides it when its time is over, so leaves cost no
+// JavaScript per frame however many there are.
+//
+// Kinds of leaves:
+//   shoot leaves  - born at a fixed depth just behind the tip, live LEAF_LIFE
+//   tufts, sprays - ride the growing tip of a branch, stay on living tips
+//   seed leaves   - the seedling's two cotyledons (2 instances, CPU)
 import * as THREE from 'three';
 import { createRandom } from '../random.js';
-import { thicknessAt, smooth } from './growth.js';
+import { thicknessAt, smooth, GROWTH } from './growth.js';
 import { TREE_HEIGHT } from './layout.js';
 import { windUniforms, WIND_GLSL } from '../wind.js';
 
-/** Shared with main.js, which keeps the sun direction (view space) current. */
+/** Shared with main.js, which keeps the sun direction (view space) and the crown current. */
 export const leafLight = {
   uSunView: { value: new THREE.Vector3(0, 1, 0) },
   uSunColor: { value: new THREE.Color('#ffd9a0') },
+  uCrown: { value: new THREE.Vector4(0, 5, 0, 5) }, // centre xyz, radius: for self-shading
 };
 
-const LEAF_SPACING = 0.11; // world units between leaves along a shoot
-const LEAF_LIFE = 0.14; // depth units a leaf lives
+export const LEAF_LIFE = 0.14; // depth units a shoot leaf lives
+const LEAF_SPACING = 0.16; // world units between leaves along a shoot
 const UNFOLD = 0.006; // depth units to unfold
-const TUFT = 8;
-const SPRAY_REACH = 0.03; // depth behind a growing tip that carries sprays // leaves around each growing tip
+const TUFT = 8; // leaves around each growing tip
+const SPRAY_REACH = 0.03; // depth behind a growing tip that carries sprays
 const COTYLEDON_HEIGHT = 0.32; // world units up the seedling stem
 
 const FRESH = new THREE.Color('#79c043');
@@ -27,99 +36,77 @@ const MATURE = new THREE.Color('#3f7d2a');
 const AUTUMN = new THREE.Color('#c9a23a');
 const SEED_LEAF = new THREE.Color('#9acb5a');
 
-export function createLeaves(branches) {
-  const slots = [];
+/**
+ * @param {object[]} branches
+ * @param {{texture: THREE.DataTexture, width: number, start: Map}} branchTex
+ */
+export function createLeaves(branches, branchTex) {
   const shoots = branches.filter((br) => !br.isRoot);
+  const leafInst = []; // [branchIndex, mode, depthOrLag, angle, tilt, size, hue]
+  const sprayInst = [];
+  const slots = []; // shoot leaves, for falling-leaf events on the CPU
+
   for (const br of shoots) {
-    const rand = createRandom(`${br.node.id}-leaves`);
+    const d0 = br.depths[0];
+    const d1 = br.depths.at(-1);
+    let rand = createRandom(`${br.node.id}-leaves`);
     const count = Math.floor(br.length / LEAF_SPACING);
     for (let k = 0; k < count; k++) {
       const dist = (k + rand.range(0.3, 0.9)) * LEAF_SPACING;
-      const f = (dist / br.length) * (br.points.length - 1);
-      const i = Math.min(br.points.length - 2, Math.floor(f));
-      slots.push({
-        branch: br,
-        i,
-        t: f - i,
-        depth: br.depths[0] + (dist / br.length) * (br.depths.at(-1) - br.depths[0]),
-        angle: k * 2.39996 + rand.range(-0.3, 0.3), // golden-angle phyllotaxis
-        tilt: rand.range(0.7, 1.15), // radians away from the stem
-        size: rand.range(0.3, 0.42),
-        hue: rand.range(-0.03, 0.03),
-      });
+      const depth = d0 + (dist / br.length) * (d1 - d0);
+      const angle = k * 2.39996 + rand.range(-0.3, 0.3); // golden-angle phyllotaxis
+      leafInst.push([br, 0, depth, angle, rand.range(0.7, 1.15), rand.range(0.3, 0.42), rand.range(-0.03, 0.03)]);
+      slots.push({ br, depth, angle });
     }
-  }
-
-  // A tuft of young leaves riding on every growing tip.
-  const tufts = [];
-  for (const br of shoots) {
-    const rand = createRandom(`${br.node.id}-tuft`);
+    rand = createRandom(`${br.node.id}-tuft`);
     for (let k = 0; k < TUFT; k++) {
-      tufts.push({
-        branch: br,
-        lag: (k / TUFT) * 0.006 + 0.0006, // depth behind the tip
-        angle: k * 2.39996 + rand.range(-0.3, 0.3),
-        tilt: rand.range(0.35, 0.8),
-        size: rand.range(0.24, 0.36),
-        hue: rand.range(-0.03, 0.03),
-      });
+      leafInst.push([br, 1, (k / TUFT) * 0.006 + 0.0006, k * 2.39996 + rand.range(-0.3, 0.3), rand.range(0.35, 0.8), rand.range(0.24, 0.36), rand.range(-0.03, 0.03)]);
     }
-  }
-
-  // Leafy sprays: each card is a twig with many leaves, so the crown can
-  // be dense without drawing every leaf. More species, more foliage.
-  const sprays = [];
-  for (const br of shoots) {
-    const rand = createRandom(`${br.node.id}-sprays`);
+    rand = createRandom(`${br.node.id}-sprays`);
     const richness = Math.log10((br.node.species ?? 1) + 1);
-    const count = Math.round(THREE.MathUtils.clamp(5 + richness * 3, 5, 22));
-    for (let k = 0; k < count; k++) {
-      sprays.push({
-        branch: br,
-        lag: (rand() ** 1.5) * SPRAY_REACH,
-        angle: rand.range(0, Math.PI * 2),
-        tilt: rand.range(0.35, 1.25),
-        size: rand.range(0.55, 0.95) * (0.85 + 0.12 * richness),
-        hue: rand.range(-0.04, 0.03),
-        light: rand.range(-0.06, 0.05),
-        wasVisible: false,
-      });
+    const sprays = Math.round(THREE.MathUtils.clamp(5 + richness * 3, 5, 22));
+    for (let k = 0; k < sprays; k++) {
+      sprayInst.push([br, 1, rand() ** 1.5 * SPRAY_REACH, rand.range(0, Math.PI * 2), rand.range(0.35, 1.25), rand.range(0.55, 0.95) * (0.85 + 0.12 * richness), rand.range(-0.06, 0.05)]);
     }
   }
 
-  // Two seed leaves, opposite each other, low on the first stem.
+  const uniforms = { uNow: { value: 0 }, uBranchTex: { value: branchTex.texture }, ...windUniforms, ...leafLight };
+  const leafMat = createGpuLeafMaterial(createLeafTexture(), uniforms, { alphaTest: 0, spray: false });
+  const sprayMat = createGpuLeafMaterial(createSprayTexture(), uniforms, { alphaTest: 0.45, spray: true });
+  const leafMesh = gpuLeafMesh(createLeafGeometry(), leafInst, branchTex, leafMat);
+  const sprayMesh = gpuLeafMesh(createSprayGeometry(), sprayInst, branchTex, sprayMat);
+
+  // Seed leaves: two instances, placed on the CPU.
   const root = branches[0];
-  const cotyledonDepth = root.depths[0] + (COTYLEDON_HEIGHT / TREE_HEIGHT);
+  const cotyledonDepth = root.depths[0] + COTYLEDON_HEIGHT / TREE_HEIGHT;
   const ci = Math.round((COTYLEDON_HEIGHT / root.length) * (root.points.length - 1));
   const cotyledons = [0, Math.PI].map((angle) => ({ branch: root, i: ci, t: 0, depth: cotyledonDepth, angle: angle + 0.6, size: 0.15 }));
-
-  const { material: leafMaterial, depthMaterial } = createLeafMaterial(createLeafTexture());
-  const leaves = new THREE.InstancedMesh(createLeafGeometry(), leafMaterial, slots.length + tufts.length);
-  const seedLeaves = new THREE.InstancedMesh(createSeedLeafGeometry(), leafMaterial, 2);
-  for (const m of [leaves, seedLeaves]) {
-    // Age of the wood each leaf hangs on, so the wind moves leaf and twig together.
-    m.geometry.setAttribute('aAge', new THREE.InstancedBufferAttribute(new Float32Array(m.count), 1).setUsage(THREE.DynamicDrawUsage));
-    m.customDepthMaterial = depthMaterial;
-    m.castShadow = true;
-    m.receiveShadow = true;
-    m.frustumCulled = false;
-    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    m.setColorAt(0, FRESH);
-  }
-  const sprayMat = createLeafMaterial(createSprayTexture(), { alphaTest: 0.45 });
-  const sprayMesh = new THREE.InstancedMesh(createSprayGeometry(), sprayMat.material, sprays.length);
-  sprayMesh.geometry.setAttribute('aAge', new THREE.InstancedBufferAttribute(new Float32Array(sprays.length), 1).setUsage(THREE.DynamicDrawUsage));
-  sprayMesh.customDepthMaterial = sprayMat.depthMaterial;
-  sprayMesh.castShadow = true;
-  sprayMesh.receiveShadow = true;
-  sprayMesh.frustumCulled = false;
-  sprayMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  sprayMesh.setColorAt(0, MATURE);
+  const seedMat = createLeafMaterial(createLeafTexture());
+  const seedLeaves = new THREE.InstancedMesh(createSeedLeafGeometry(), seedMat.material, 2);
+  seedLeaves.geometry.setAttribute('aAge', new THREE.InstancedBufferAttribute(new Float32Array(2), 1).setUsage(THREE.DynamicDrawUsage));
+  seedLeaves.customDepthMaterial = seedMat.depthMaterial;
+  seedLeaves.castShadow = true;
+  seedLeaves.frustumCulled = false;
+  seedLeaves.count = 0;
 
   const group = new THREE.Group();
-  group.add(leaves, seedLeaves, sprayMesh);
+  group.add(leafMesh, sprayMesh, seedLeaves);
 
-  // Scratch objects.
+  // CPU side: only events (which leaves let go) and the two seed leaves.
+  slots.sort((a, b) => a.depth - b.depth);
+  const slotDepths = Float64Array.from(slots, (s) => s.depth);
+  const firstAtOrAbove = (d) => {
+    let lo = 0;
+    let hi = slotDepths.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (slotDepths[mid] < d) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const tips = shoots.map((br) => ({ br, d0: br.depths[0], d1: br.depths.at(-1), living: !br.node.children.length && !br.node.endMa }));
+
   const p = new THREE.Vector3();
   const tan = new THREE.Vector3();
   const radial = new THREE.Vector3();
@@ -129,139 +116,229 @@ export function createLeaves(branches) {
   const up = new THREE.Vector3(0, 1, 0);
   const m4 = new THREE.Matrix4();
   const color = new THREE.Color();
-  const hidden = new THREE.Matrix4().makeScale(0, 0, 0);
 
-  function place(mesh, idx, slot, open, size) {
-    const br = slot.branch;
-    const { i, t } = slot;
-    p.lerpVectors(br.points[i], br.points[i + 1], t);
-    tan.lerpVectors(br.tangents[i], br.tangents[i + 1], t).normalize();
-    const n = br.normals[i];
-    const b = br.binormals[i];
-    radial.copy(n).multiplyScalar(Math.cos(slot.angle)).addScaledVector(b, Math.sin(slot.angle));
-    // Sit on the bark surface.
-    const r = br.radii[i] * thicknessAt(slotAge);
-    p.addScaledVector(radial, r * 0.9);
-    // Folded against the shoot when closed, angled out when open.
-    const tilt = (slot.tilt ?? 1.3) * open;
-    yAxis.copy(tan).multiplyScalar(Math.cos(tilt)).addScaledVector(radial, Math.sin(tilt)).normalize();
-    // Leaf blade faces the sky as much as it can.
-    zAxis.copy(up).addScaledVector(yAxis, -up.dot(yAxis));
-    if (zAxis.lengthSq() < 1e-4) zAxis.copy(radial);
-    zAxis.normalize();
-    xAxis.crossVectors(yAxis, zAxis);
-    m4.makeBasis(xAxis, yAxis, zAxis).scale(p.set(size, size, size));
-    // makeBasis+scale reset the translation; set it again.
-    p.lerpVectors(br.points[i], br.points[i + 1], t).addScaledVector(radial, r * 0.9);
-    m4.setPosition(p);
-    mesh.setMatrixAt(idx, m4);
-    mesh.geometry.attributes.aAge.array[idx] = slotAge;
+  /** Point on a branch's surface at a depth, at an angle around it. */
+  function surfacePoint(br, depth, angle, out) {
+    const d0 = br.depths[0];
+    const d1 = br.depths.at(-1);
+    const f = THREE.MathUtils.clamp((depth - d0) / (d1 - d0 || 1), 0, 1) * (br.points.length - 1);
+    const i = Math.min(br.points.length - 2, Math.floor(f));
+    out.lerpVectors(br.points[i], br.points[i + 1], f - i);
+    radial.copy(br.normals[i]).multiplyScalar(Math.cos(angle)).addScaledVector(br.binormals[i], Math.sin(angle));
+    return out.addScaledVector(radial, br.radii[i] * 0.3);
   }
 
-  let slotAge = 0;
   let prevNow = 0;
-  const dying = []; // world positions of leaves that just reached the end of their life
+  let activeSprays = 0;
+  const dying = []; // world positions of leaves that just let go
   function update(now, dt = 0) {
+    uniforms.uNow.value = now;
     dying.length = 0;
     const forward = now > prevNow && now - prevNow < 0.01;
-    for (let k = 0; k < slots.length; k++) {
-      const s = slots[k];
-      const age = now - s.depth;
-      if (forward && age > LEAF_LIFE * 0.9 && prevNow - s.depth <= LEAF_LIFE * 0.9) {
-        leaves.getMatrixAt(k, m4);
-        dying.push(new THREE.Vector3().setFromMatrixPosition(m4));
-      }
-      if (age <= 0 || age > LEAF_LIFE) {
-        leaves.setMatrixAt(k, hidden);
-        continue;
-      }
-      slotAge = age;
-      const open = smooth(0, UNFOLD, age);
-      const fall = 1 - smooth(LEAF_LIFE * 0.85, LEAF_LIFE, age);
-      place(leaves, k, s, open, s.size * (0.25 + 0.75 * open) * fall);
-      color.copy(FRESH).lerp(MATURE, smooth(0, LEAF_LIFE * 0.5, age)).lerp(AUTUMN, smooth(LEAF_LIFE * 0.6, LEAF_LIFE * 0.9, age));
-      color.offsetHSL(s.hue, 0, 0);
-      leaves.setColorAt(k, color);
+    if (forward) {
+      // Shoot leaves whose life just ended.
+      const a = firstAtOrAbove(prevNow - LEAF_LIFE * 0.9);
+      const b = firstAtOrAbove(now - LEAF_LIFE * 0.9);
+      for (let k = a; k < b && dying.length < 60; k++) dying.push(surfacePoint(slots[k].br, slots[k].depth, slots[k].angle, new THREE.Vector3()));
     }
-    for (let k = 0; k < tufts.length; k++) {
-      const s = tufts[k];
-      const br = s.branch;
-      const idx = slots.length + k;
-      const d0 = br.depths[0];
-      const d1 = br.depths.at(-1);
-      const living = !br.node.children.length && !br.node.endMa;
-      const depth = Math.min(now, d1) - s.lag;
-      // Only while this branch is the one growing (or it is a living tip).
-      if (now <= d0 || depth <= d0 || (now > d1 + 1e-6 && !living)) {
-        leaves.setMatrixAt(idx, hidden);
-        continue;
-      }
-      const f = ((depth - d0) / (d1 - d0)) * (br.points.length - 1);
-      const i = Math.min(br.points.length - 2, Math.floor(f));
-      slotAge = now - depth;
-      const open = smooth(0, 0.004, now - d0);
-      place(leaves, idx, { branch: br, i, t: f - i, angle: s.angle, tilt: s.tilt }, open, s.size * (0.3 + 0.7 * open));
-      leaves.setColorAt(idx, color.copy(FRESH).offsetHSL(s.hue, 0.02, 0.02));
-    }
-    leaves.instanceMatrix.needsUpdate = true;
-    leaves.geometry.attributes.aAge.needsUpdate = true;
-
-    for (let k = 0; k < sprays.length; k++) {
-      const s = sprays[k];
-      const br = s.branch;
-      const d0 = br.depths[0];
-      const d1 = br.depths.at(-1);
-      const living = !br.node.children.length && !br.node.endMa;
-      const depth = Math.min(now, d1) - s.lag * Math.min(1, (d1 - d0) / SPRAY_REACH);
-      const visible = now > d0 && depth > d0 && (now <= d1 + 1e-6 || living);
-      if (!visible) {
-        // A spray left behind when its shoot forked drops its leaves.
-        if (s.wasVisible && forward) {
-          sprayMesh.getMatrixAt(k, m4);
-          const at = new THREE.Vector3().setFromMatrixPosition(m4);
-          for (let j = 0; j < 3; j++) dying.push(at.clone().add(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.4, Math.random() - 0.5).multiplyScalar(s.size)));
+    if (now !== prevNow) {
+      activeSprays = 0;
+      for (const t of tips) {
+        const active = now > t.d0 && (now <= t.d1 || t.living);
+        if (active) activeSprays++;
+        // A shoot that just forked drops the sprays at its old tip.
+        if (forward && !t.living && prevNow <= t.d1 && now > t.d1) {
+          for (let j = 0; j < 3; j++) dying.push(surfacePoint(t.br, t.d1 - Math.random() * 0.01, Math.random() * 6.28, new THREE.Vector3()));
         }
-        s.wasVisible = false;
-        sprayMesh.setMatrixAt(k, hidden);
-        continue;
       }
-      const f = ((depth - d0) / (d1 - d0)) * (br.points.length - 1);
-      const i = Math.min(br.points.length - 2, Math.floor(f));
-      slotAge = now - depth;
-      const open = smooth(0, 0.01, now - d0);
-      place(sprayMesh, k, { branch: br, i, t: f - i, angle: s.angle, tilt: s.tilt }, open, s.size * (0.2 + 0.8 * open));
-      sprayMesh.setColorAt(k, color.copy(MATURE).lerp(FRESH, 0.35 + s.light * 3).offsetHSL(s.hue, 0, s.light));
-      // Now and then a leaf lets go.
-      if (s.wasVisible && Math.random() < dt * 0.012) {
-        sprayMesh.getMatrixAt(k, m4);
-        dying.push(new THREE.Vector3().setFromMatrixPosition(m4).add(new THREE.Vector3(0, s.size * 0.5, 0)));
-      }
-      s.wasVisible = true;
     }
-    sprayMesh.instanceMatrix.needsUpdate = true;
-    sprayMesh.geometry.attributes.aAge.needsUpdate = true;
-    if (sprayMesh.instanceColor) sprayMesh.instanceColor.needsUpdate = true;
-    if (leaves.instanceColor) leaves.instanceColor.needsUpdate = true;
+    // Now and then a leaf lets go from the living crown.
+    const drops = activeSprays * dt * 0.05;
+    for (let k = 0; k < drops || Math.random() < drops - k; k++) {
+      const t = tips[Math.floor(Math.random() * tips.length)];
+      if (now > t.d0 && (now <= t.d1 || t.living)) dying.push(surfacePoint(t.br, Math.min(now, t.d1) - Math.random() * 0.02, Math.random() * 6.28, new THREE.Vector3()).add(new THREE.Vector3(0, 0.3, 0)));
+      if (k > 5) break;
+    }
 
-    cotyledons.forEach((c, k) => {
+    // Seed leaves.
+    let nc = 0;
+    for (const c of cotyledons) {
       const age = now - c.depth;
-      if (age <= 0 || age > 0.09) {
-        seedLeaves.setMatrixAt(k, hidden);
-        return;
-      }
-      slotAge = age;
+      if (age <= 0 || age > 0.09) continue;
       const open = smooth(0.002, 0.014, age);
       const fall = 1 - smooth(0.075, 0.09, age);
-      place(seedLeaves, k, { ...c, tilt: 0.15 + 1.35 * open }, 1, c.size * (0.5 + 0.5 * open) * fall);
-      seedLeaves.setColorAt(k, color.copy(SEED_LEAF).lerp(AUTUMN, smooth(0.05, 0.08, age)));
-    });
+      const br = c.branch;
+      const size = c.size * (0.5 + 0.5 * open) * fall;
+      p.copy(br.points[c.i]);
+      tan.copy(br.tangents[c.i]);
+      radial.copy(br.normals[c.i]).multiplyScalar(Math.cos(c.angle)).addScaledVector(br.binormals[c.i], Math.sin(c.angle));
+      p.addScaledVector(radial, br.radii[c.i] * thicknessAt(age) * 0.9);
+      const tilt = 0.15 + 1.35 * open;
+      yAxis.copy(tan).multiplyScalar(Math.cos(tilt)).addScaledVector(radial, Math.sin(tilt)).normalize();
+      zAxis.copy(up).addScaledVector(yAxis, -up.dot(yAxis));
+      if (zAxis.lengthSq() < 1e-4) zAxis.copy(radial);
+      zAxis.normalize();
+      xAxis.crossVectors(yAxis, zAxis);
+      m4.makeBasis(xAxis.multiplyScalar(size), yAxis.multiplyScalar(size), zAxis.multiplyScalar(size)).setPosition(p);
+      seedLeaves.setMatrixAt(nc, m4);
+      seedLeaves.geometry.attributes.aAge.array[nc] = age;
+      seedLeaves.setColorAt(nc++, color.copy(SEED_LEAF).lerp(AUTUMN, smooth(0.05, 0.08, age)));
+    }
+    seedLeaves.count = nc;
     seedLeaves.instanceMatrix.needsUpdate = true;
     seedLeaves.geometry.attributes.aAge.needsUpdate = true;
-    prevNow = now;
     if (seedLeaves.instanceColor) seedLeaves.instanceColor.needsUpdate = true;
+    prevNow = now;
   }
 
-  return { group, update, dying };
+  return { group, update, dying, counts: { leaves: leafInst.length, sprays: sprayInst.length } };
+}
+
+/** One instanced mesh; each instance carries its branch and leaf parameters. */
+function gpuLeafMesh(base, inst, branchTex, material) {
+  const geometry = new THREE.InstancedBufferGeometry();
+  geometry.index = base.index;
+  for (const name of ['position', 'normal', 'uv']) geometry.setAttribute(name, base.attributes[name]);
+  const aBranch = new Float32Array(inst.length * 4);
+  const aMode = new Float32Array(inst.length * 4);
+  const aShape = new Float32Array(inst.length * 4);
+  inst.forEach(([br, mode, value, angle, tilt, size, hue], k) => {
+    const living = !br.node.children.length && !br.node.endMa ? 1 : 0;
+    aBranch.set([branchTex.start.get(br), br.points.length, br.depths[0], br.depths.at(-1)], k * 4);
+    aMode.set([mode, value, living, 0], k * 4);
+    aShape.set([angle, tilt, size, hue], k * 4);
+  });
+  geometry.setAttribute('aBranch', new THREE.InstancedBufferAttribute(aBranch, 4));
+  geometry.setAttribute('aMode', new THREE.InstancedBufferAttribute(aMode, 4));
+  geometry.setAttribute('aShape', new THREE.InstancedBufferAttribute(aShape, 4));
+  geometry.instanceCount = inst.length;
+  const mesh = new THREE.Mesh(geometry, material.material);
+  mesh.customDepthMaterial = material.depthMaterial;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.frustumCulled = false;
+  return mesh;
+}
+
+const glslColor = (c) => `vec3(${c.r.toFixed(4)}, ${c.g.toFixed(4)}, ${c.b.toFixed(4)})`;
+
+const GPU_LEAF_VERTEX_HEADER = /* glsl */ `
+attribute vec4 aBranch; // first sample, sample count, start depth, end depth
+attribute vec4 aMode;   // mode (0 shoot leaf, 1 rides the tip), depth or lag, living, -
+attribute vec4 aShape;  // angle, tilt, size, hue
+uniform float uNow;
+uniform highp sampler2D uBranchTex;
+uniform vec4 uCrown;
+varying vec3 vLeafColor;
+varying float vShade;
+${WIND_GLSL}
+
+vec4 sampleTexel(float s, float k) {
+  int t = int(s) * 3 + int(k);
+  int w = textureSize(uBranchTex, 0).x;
+  return texelFetch(uBranchTex, ivec2(t % w, t / w), 0);
+}
+float woodThickness(float age) {
+  float g = ${GROWTH.minThickness.toFixed(3)} + ${(1 - GROWTH.minThickness).toFixed(3)} * pow(smoothstep(0.0, ${GROWTH.thickenSpan.toFixed(3)}, age), ${GROWTH.thickenPower.toFixed(3)});
+  return g * smoothstep(0.0, ${GROWTH.tipLength.toFixed(4)}, age);
+}
+// Places, orients, unfolds, ages and hides a leaf from its branch and uNow.
+void computeLeaf(out vec3 outPos, out vec3 outNormal) {
+  float d0 = aBranch.z;
+  float d1 = aBranch.w;
+  float depth;
+  float shown;
+  float open;
+  float scale;
+  if (aMode.x < 0.5) {
+    depth = aMode.y;
+    float a = uNow - depth;
+    shown = step(0.0, a) * step(a, ${LEAF_LIFE.toFixed(3)});
+    open = smoothstep(0.0, ${UNFOLD.toFixed(4)}, a);
+    scale = (0.25 + 0.75 * open) * (1.0 - smoothstep(${(LEAF_LIFE * 0.85).toFixed(4)}, ${LEAF_LIFE.toFixed(3)}, a));
+    vLeafColor = mix(mix(${glslColor(FRESH)}, ${glslColor(MATURE)}, smoothstep(0.0, ${(LEAF_LIFE * 0.5).toFixed(4)}, a)), ${glslColor(AUTUMN)}, smoothstep(${(LEAF_LIFE * 0.6).toFixed(4)}, ${(LEAF_LIFE * 0.9).toFixed(4)}, a));
+  } else {
+    float onTip = step(d0, uNow) * max(step(uNow, d1 + 1e-6), aMode.z);
+    depth = min(uNow, d1) - aMode.y * min(1.0, (d1 - d0) / ${SPRAY_REACH.toFixed(3)});
+    shown = onTip * step(d0, depth);
+    open = smoothstep(0.0, 0.01, uNow - d0);
+    scale = 0.25 + 0.75 * open;
+    #ifdef SPRAY_LEAVES
+      vLeafColor = mix(${glslColor(MATURE)}, ${glslColor(FRESH)}, clamp(0.35 + aShape.w * 3.0, 0.0, 1.0)) * (1.0 + aShape.w);
+    #else
+      vLeafColor = ${glslColor(FRESH)} * (1.0 + aShape.w);
+    #endif
+  }
+  float age = uNow - depth;
+  float f = clamp((depth - d0) / max(d1 - d0, 1e-6), 0.0, 1.0) * (aBranch.y - 1.0);
+  float si = min(floor(f), aBranch.y - 2.0);
+  float st = f - si;
+  vec4 A0 = sampleTexel(aBranch.x + si, 0.0);
+  vec4 A1 = sampleTexel(aBranch.x + si + 1.0, 0.0);
+  vec4 B0 = sampleTexel(aBranch.x + si, 1.0);
+  vec4 C0 = sampleTexel(aBranch.x + si, 2.0);
+  vec3 P = mix(A0.xyz, A1.xyz, st);
+  vec3 T = normalize(B0.xyz);
+  vec3 N = normalize(C0.xyz);
+  vec3 Bn = cross(T, N);
+  vec3 radial = cos(aShape.x) * N + sin(aShape.x) * Bn;
+  P += radial * mix(A0.w, A1.w, st) * woodThickness(age) * 0.9;
+  float tilt = aShape.y * open;
+  vec3 Y = normalize(T * cos(tilt) + radial * sin(tilt));
+  vec3 Z = vec3(0.0, 1.0, 0.0) - Y * Y.y;
+  Z = dot(Z, Z) < 1e-4 ? radial : normalize(Z);
+  vec3 X = cross(Y, Z);
+  float size = aShape.z * scale * shown;
+  vec3 pos = P + (X * position.x + Y * position.y + Z * position.z) * size;
+  vec3 sway = windSway(P, age);
+  pos += sway + vec3(0.0, sin(uTime * 4.0 + P.x * 3.1 + P.z * 2.3) * 0.04 * uWind * position.y * size, 0.0);
+  // Self-shading: leaves deep inside the crown get less light.
+  float inner = length(P - uCrown.xyz) / max(uCrown.w, 0.5);
+  vShade = mix(0.45, 1.0, smoothstep(0.25, 0.95, inner));
+  outPos = pos;
+  outNormal = Z;
+  }
+`;
+
+
+const GPU_LEAF_NORMAL = /* glsl */ `
+vec3 leafPos;
+vec3 leafNormal;
+computeLeaf(leafPos, leafNormal);
+vec3 objectNormal = leafNormal;
+`;
+
+function createGpuLeafMaterial(map, uniforms, { alphaTest, spray }) {
+  const material = new THREE.MeshStandardMaterial({ map, alphaTest, side: THREE.DoubleSide, roughness: 0.55, metalness: 0 });
+  const defines = spray ? '#define SPRAY_LEAVES\n' : '';
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader =
+      defines +
+      GPU_LEAF_VERTEX_HEADER +
+      shader.vertexShader
+        .replace('#include <beginnormal_vertex>', GPU_LEAF_NORMAL)
+        .replace('#include <begin_vertex>', 'vec3 transformed = leafPos;');
+    shader.fragmentShader =
+      'uniform vec3 uSunView;\nuniform vec3 uSunColor;\nvarying vec3 vLeafColor;\nvarying float vShade;\n' +
+      shader.fragmentShader
+        .replace('#include <map_fragment>', '#include <map_fragment>\ndiffuseColor.rgb *= vLeafColor * vShade;')
+        .replace(
+          '#include <emissivemap_fragment>',
+          /* glsl */ `#include <emissivemap_fragment>
+          float through = pow(max(dot(normalize(vViewPosition), -uSunView), 0.0), 3.0);
+          totalEmissiveRadiance += diffuseColor.rgb * (uSunColor * through * 0.9 + 0.07);`,
+        );
+  };
+  const depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: alphaTest ? map : null, alphaTest });
+  depthMaterial.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader =
+      defines +
+      GPU_LEAF_VERTEX_HEADER +
+      shader.vertexShader.replace('#include <begin_vertex>', 'vec3 leafPos;\nvec3 leafNormal;\ncomputeLeaf(leafPos, leafNormal);\nvec3 transformed = leafPos;');
+  };
+  return { material, depthMaterial };
 }
 
 /** A pointed leaf along +Y, slightly cupped and drooping at the tip. */
@@ -270,7 +347,7 @@ function createLeafGeometry() {
   shape.moveTo(0, 0);
   shape.bezierCurveTo(0.3, 0.2, 0.32, 0.65, 0, 1);
   shape.bezierCurveTo(-0.32, 0.65, -0.3, 0.2, 0, 0);
-  const g = new THREE.ShapeGeometry(shape, 8);
+  const g = new THREE.ShapeGeometry(shape, 4);
   setLeafUv(g, 0.7, 1);
   bend(g, 0.6, 0.25);
   return g;

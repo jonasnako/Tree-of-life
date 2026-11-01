@@ -26,11 +26,17 @@ export function createUI(clock, events = []) {
 
   // Time slider. Positions are in depth, so recent forks get room.
   const SLIDER_MAX = Number(timeInput.max);
-  for (const e of events) {
-    const mark = document.createElement('span');
-    mark.className = 'timeline-mark';
-    mark.style.left = `${depthAt(e.ma) * 100}%`;
-    marksEl.append(mark);
+  function setEvents(list) {
+    events = list;
+    marksEl.replaceChildren(
+      ...events.map((e) => {
+        const mark = document.createElement('span');
+        mark.className = 'timeline-mark';
+        mark.style.left = `${depthAt(e.ma) * 100}%`;
+        return mark;
+      }),
+    );
+    lastEvent = undefined;
   }
   let scrubbing = false;
   let resumeAfterScrub = false;
@@ -82,6 +88,7 @@ export function createUI(clock, events = []) {
 
   let lastText = '';
   let lastEvent = null;
+  setEvents(events);
   function update() {
     const ma = clock.ma;
     if (!scrubbing) timeInput.value = String(Math.round(depthAt(ma) * SLIDER_MAX));
@@ -106,5 +113,5 @@ export function createUI(clock, events = []) {
     }
   }
 
-  return { update };
+  return { update, setEvents };
 }

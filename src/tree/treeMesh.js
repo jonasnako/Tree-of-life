@@ -5,12 +5,18 @@
 // shoot, a young twig or barked wood. Old wood gets gnarled: the trunk
 // flutes into twisted ridges and grooves, burls swell out, bark turns grey,
 // deeply fissured and mossy near the ground. Young wood bends more in the wind.
+//
+// Bark is procedural: cellular (Voronoi) noise evaluated per pixel on the
+// branch's own cylinder coordinates gives bark plates split by fissures, and
+// the lighting is bent by the noise's screen-space slope. No textures, no
+// seams, sharp at any distance.
 import * as THREE from 'three';
+import { leafLight } from './leaves.js';
 import { GROWTH } from './growth.js';
 import { windUniforms, WIND_GLSL } from '../wind.js';
 import { createRandom } from '../random.js';
 
-export function createTreeMesh(branches, barkTextures) {
+export function createTreeMesh(branches) {
   const uniforms = {
     uNow: { value: 0 },
     uTipLen: { value: GROWTH.tipLength },
@@ -25,18 +31,16 @@ export function createTreeMesh(branches, barkTextures) {
     uTwigColor: { value: new THREE.Color('#7a5a3c') },
     uWeathered: { value: new THREE.Color('#a8a396') },
     uMoss: { value: new THREE.Color('#5d7a2c') },
+    uBarkDark: { value: new THREE.Color('#2e2822') },
+    uBarkPlate: { value: new THREE.Color('#7a6f60') },
+    uLichen: { value: new THREE.Color('#9fa98a') },
+    uCrown: leafLight.uCrown,
     ...windUniforms,
   };
 
   const geometry = buildGeometry(branches);
 
-  const material = new THREE.MeshStandardMaterial({
-    map: barkTextures.map,
-    bumpMap: barkTextures.bumpMap,
-    bumpScale: 5,
-    roughness: 0.95,
-    metalness: 0,
-  });
+  const material = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0 });
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader =
@@ -47,10 +51,7 @@ export function createTreeMesh(branches, barkTextures) {
       shader.fragmentShader
         .replace('#include <map_fragment>', COLOR_FRAGMENT)
         .replace('#include <roughnessmap_fragment>', ROUGHNESS_FRAGMENT)
-        .replace(
-          '#include <bumpmap_pars_fragment>',
-          THREE.ShaderChunk.bumpmap_pars_fragment.replaceAll('bumpScale *', 'bumpScale * barkDepth(vAge) *'),
-        );
+        .replace('#include <normal_fragment_maps>', BARK_NORMAL_FRAGMENT);
   };
 
   // Shadows must see the same grown shape.
@@ -89,6 +90,9 @@ uniform float uThickPow;
 varying float vAge;
 varying float vHeight;
 varying float vGroove;
+varying vec3 vBarkP;
+varying float vWoodAO;
+uniform vec4 uCrown;
 ${WIND_GLSL}
 
 // Twisted fluting: lobes around the trunk that spiral along the path
@@ -134,6 +138,12 @@ transformed += windSway(position, age);
 vAge = age;
 vHeight = position.y;
 vGroove = clamp(-off.x * 2.5, 0.0, 1.0);
+// Bark lives on the full-grown cylinder, so its pattern stays put (and
+// cracks open) as the wood thickens. Plates are longer than wide.
+vBarkP = vec3(cos(aAngle) * aRadius * 7.0, sin(aAngle) * aRadius * 7.0, aPath * 1.3);
+// Cheap ambient occlusion: wood deep in the crown and at the ground sees less sky.
+float crownDist = length(position - uCrown.xyz) / max(uCrown.w, 0.5);
+vWoodAO = mix(0.55, 1.0, smoothstep(0.15, 0.9, crownDist)) * mix(0.6, 1.0, smoothstep(-0.2, 0.7, position.y));
 `;
 
 const FRAGMENT_HEADER = /* glsl */ `
@@ -148,37 +158,90 @@ uniform vec3 uMoss;
 varying float vAge;
 varying float vHeight;
 varying float vGroove;
+varying vec3 vBarkP;
+varying float vWoodAO;
+uniform vec3 uBarkDark;
+uniform vec3 uBarkPlate;
+uniform vec3 uLichen;
+float barkH;
+
+vec3 hash33(vec3 p) {
+  p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+  p += dot(p, p.yxz + 33.33);
+  return fract((p.xxy + p.yxx) * p.zyx);
+}
+// Cellular noise: distance to the nearest and second-nearest feature point.
+vec2 voronoi(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  float d1 = 8.0;
+  float d2 = 8.0;
+  for (int z = -1; z <= 1; z++)
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec3 g = vec3(float(x), float(y), float(z));
+    vec3 r = g + hash33(i + g) - f;
+    float d = dot(r, r);
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) { d2 = d; }
+  }
+  return sqrt(vec2(d1, d2));
+}
+float vnoise(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hash33(i).x, b = hash33(i + vec3(1, 0, 0)).x, c = hash33(i + vec3(0, 1, 0)).x, d = hash33(i + vec3(1, 1, 0)).x;
+  float e = hash33(i + vec3(0, 0, 1)).x, g = hash33(i + vec3(1, 0, 1)).x, h = hash33(i + vec3(0, 1, 1)).x, k = hash33(i + vec3(1, 1, 1)).x;
+  return mix(mix(mix(a, b, f.x), mix(c, d, f.x), f.y), mix(mix(e, g, f.x), mix(h, k, f.x), f.y), f.z);
+}
 // Bark relief: none on green shoots, deep fissures on old wood.
 float barkDepth(float age) {
   return smoothstep(uBark0, uBark1, age) * (1.0 + 1.2 * smoothstep(0.3, 0.9, age));
 }
 `;
 
-// Green shoot -> brown twig -> bark -> ancient grey, fissured, mossy bark.
+// Green shoot -> brown twig -> procedural bark -> ancient grey, fissured,
+// lichen-spotted, mossy bark.
 const COLOR_FRAGMENT = /* glsl */ `
 float barkMix = smoothstep(uBark0, uBark1, vAge);
+float old = smoothstep(0.3, 0.95, vAge);
 vec3 young = mix(uShoot, uTwigColor, smoothstep(uTwig0, uTwig1, vAge));
-#ifdef USE_MAP
-  vec4 barkTexel = texture2D(map, vMapUv);
-  vec3 bark = barkTexel.rgb;
-  float old = smoothstep(0.3, 0.95, vAge);
-  float ridge = barkTexel.r * 2.2;
-  // Old wood weathers to silver-grey on the ridges.
-  bark = mix(bark, uWeathered * ridge, 0.55 * old);
-  #ifdef USE_BUMPMAP
-    float height = texture2D(bumpMap, vBumpMapUv).x;
-    // Deep fissures go dark.
-    bark *= mix(1.0, mix(0.45, 1.1, height), barkMix * (0.4 + 0.6 * old));
-    // Moss settles in the furrows low on old wood.
-    float moss = (1.0 - smoothstep(0.1, 1.8, vHeight)) * smoothstep(0.25, 0.6, vAge) * smoothstep(0.3, 0.7, 1.0 - height);
-    bark = mix(bark, uMoss * (0.7 + 0.6 * ridge), moss * 0.8);
-  #endif
-  // Shade the grooves between the twisted ridges.
-  bark *= 1.0 - 0.55 * vGroove * old;
-  diffuseColor.rgb *= mix(young, bark, barkMix);
-#else
-  diffuseColor.rgb *= young;
-#endif
+// Plates and fissures; fissures widen as the wood ages.
+// Warp the cells so fissures wander like real bark rather than tiles.
+vec3 warp = vec3(vnoise(vBarkP * 0.45), vnoise(vBarkP * 0.45 + 7.3), vnoise(vBarkP * 0.45 + 13.1)) - 0.5;
+vec2 cell = voronoi(vBarkP + warp * 1.6);
+float edge = cell.y - cell.x;
+float fissure = 1.0 - smoothstep(0.0, mix(0.05, 0.28, old), edge);
+float grain = vnoise(vBarkP * vec3(1.0, 1.0, 0.25) * 3.0);
+float fine = vnoise(vBarkP * 9.0);
+barkH = (1.0 - fissure) * (0.75 + 0.25 * grain) + 0.08 * fine;
+vec3 bark = mix(uBarkDark, uBarkPlate * (0.75 + 0.5 * grain), 1.0 - fissure);
+bark *= 0.85 + 0.3 * fine;
+// Old plates weather to silver-grey; lichen spots them.
+bark = mix(bark, uWeathered * (0.8 + 0.4 * grain), 0.5 * old * (1.0 - fissure));
+float lichen = smoothstep(0.62, 0.72, vnoise(vBarkP * 0.7 + 3.1)) * old * (1.0 - fissure);
+bark = mix(bark, uLichen * (0.8 + 0.3 * fine), lichen * 0.75);
+// Moss settles in the fissures low on old wood.
+float moss = (1.0 - smoothstep(0.1, 1.8, vHeight)) * smoothstep(0.25, 0.6, vAge) * fissure;
+bark = mix(bark, uMoss * (0.8 + 0.4 * grain), moss * 0.85);
+// Shade the grooves between the twisted ridges.
+bark *= 1.0 - 0.55 * vGroove * old;
+diffuseColor.rgb *= mix(young, bark, barkMix) * vWoodAO;
+barkH *= barkMix;
+`;
+
+// Bend the normal by the bark's slope in screen space (bump mapping without a map).
+const BARK_NORMAL_FRAGMENT = /* glsl */ `
+{
+  vec3 dpdx = dFdx(-vViewPosition);
+  vec3 dpdy = dFdy(-vViewPosition);
+  vec3 r1 = cross(dpdy, normal);
+  vec3 r2 = cross(normal, dpdx);
+  float det = dot(dpdx, r1);
+  float strength = 0.04 * barkDepth(vAge);
+  vec3 grad = sign(det) * (dFdx(barkH) * r1 + dFdy(barkH) * r2) * strength;
+  normal = normalize(abs(det) * normal - grad);
+}
 `;
 
 // Fresh shoots are smoother and catch a little sheen.
@@ -297,5 +360,5 @@ function makeBurls(br, maxR) {
 }
 
 function radialSegments(radius) {
-  return Math.max(6, Math.min(24, Math.round(6 + radius * 30)));
+  return Math.max(5, Math.min(20, Math.round(4 + radius * 26)));
 }

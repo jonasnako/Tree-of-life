@@ -1,13 +1,14 @@
 // Tree data: loads the node file and links it into a tree.
 // Node format (see CLAUDE.md, "Data model"): id, parent, name, splitMa, species.
-import treeFile from '../public/data/tree-human.json';
+// The file is built from real data by scripts/build-slice.mjs.
+import treeFile from '../public/data/tree-slice.json';
 
-export const TIME_START_MA = 4000;
 export const TIME_END_MA = 0;
 
 /**
- * @returns {{ root: object, byId: Map<string, object>, focus: object, lineage: object[] }}
- * Each node gets `children`, `parentNode` and `species` (summed for inner nodes).
+ * @returns {{ root, byId, originMa, showcase, focus, lineage }}
+ * Each node gets `children` and `parentNode`. `focus` is the followed
+ * species and `lineage` its path from the root; change it with setFocus().
  */
 export function loadTree(file = treeFile) {
   const byId = new Map();
@@ -21,16 +22,28 @@ export function loadTree(file = treeFile) {
       parent.children.push(node);
     }
   }
+  // Species counts come with the file; fill any gaps from the children.
   const sum = (node) => {
-    if (node.children.length) node.species = node.children.reduce((s, c) => s + sum(c), 0);
-    return node.species ?? 1;
+    const below = node.children.reduce((s, c) => s + sum(c), 0);
+    if (!node.species) node.species = Math.max(1, below);
+    return node.species;
   };
   sum(root);
 
-  const focus = byId.get(file.focus);
-  const lineage = [];
-  for (let n = focus; n; n = n.parentNode) lineage.unshift(n);
-  return { root, byId, focus, lineage };
+  const showcase = (file.showcase ?? []).map((s) => ({ ...s, node: byId.get(s.id) })).filter((s) => s.node);
+  const tree = { root, byId, originMa: file.originMa ?? 4000, showcase, focus: null, lineage: [] };
+  setFocus(tree, file.focus ?? showcase[0]?.key);
+  return tree;
+}
+
+/** Follow a showcase species (by key) or any node (by id). */
+export function setFocus(tree, keyOrId) {
+  const pick = tree.showcase.find((s) => s.key === keyOrId);
+  const focus = pick?.node ?? tree.byId.get(keyOrId) ?? tree.root;
+  tree.focus = focus;
+  tree.focusLabel = pick?.label ?? focus.name;
+  tree.lineage = [];
+  for (let n = focus; n; n = n.parentNode) tree.lineage.unshift(n);
 }
 
 // Geological eons, oldest first, for the label under the counter.
