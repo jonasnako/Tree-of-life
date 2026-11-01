@@ -1,0 +1,88 @@
+{
+  "about": "Hand-made slice for build step 2: the human lineage, with each sister clade collapsed to one node. splitMa is the date (millions of years ago) the lineage split from its sister; species counts are approximate described species for collapsed clades. Dates and counts are rough placeholders, to be replaced by the real pipeline in step 4.",
+  "focus": "homo-sapiens",
+  "nodes": [
+    { "id": "life", "parent": null, "name": "Life", "splitMa": 4000 },
+
+    { "id": "bacteria", "parent": "life", "name": "Bacteria", "splitMa": 3500, "species": 30000 },
+    { "id": "archaea-eukaryotes", "parent": "life", "name": "Archaea and eukaryotes", "splitMa": 3500 },
+
+    { "id": "archaea", "parent": "archaea-eukaryotes", "name": "Archaea", "splitMa": 2700, "species": 1000 },
+    { "id": "eukaryotes", "parent": "archaea-eukaryotes", "name": "Eukaryotes", "splitMa": 2700 },
+
+    { "id": "plants-algae", "parent": "eukaryotes", "name": "Plants, algae and diatoms", "splitMa": 1700, "species": 450000 },
+    { "id": "amorphea", "parent": "eukaryotes", "name": "Amorphea", "splitMa": 1700 },
+
+    { "id": "amoebozoa", "parent": "amorphea", "name": "Amoebae and slime moulds", "splitMa": 1500, "species": 2400 },
+    { "id": "opisthokonts", "parent": "amorphea", "name": "Opisthokonts", "splitMa": 1500 },
+
+    { "id": "fungi", "parent": "opisthokonts", "name": "Fungi", "splitMa": 1100, "species": 150000 },
+    { "id": "holozoa", "parent": "opisthokonts", "name": "Holozoa", "splitMa": 1100 },
+
+    { "id": "choanoflagellates", "parent": "holozoa", "name": "Choanoflagellates", "splitMa": 900, "species": 250 },
+    { "id": "animals", "parent": "holozoa", "name": "Animals", "splitMa": 900 },
+
+    { "id": "sponges", "parent": "animals", "name": "Sponges", "splitMa": 750, "species": 9000 },
+    { "id": "eumetazoa", "parent": "animals", "name": "Eumetazoa", "splitMa": 750 },
+
+    { "id": "cnidarians", "parent": "eumetazoa", "name": "Jellyfish and corals", "splitMa": 700, "species": 11000 },
+    { "id": "bilaterians", "parent": "eumetazoa", "name": "Bilaterians", "splitMa": 700 },
+
+    { "id": "protostomes", "parent": "bilaterians", "name": "Insects, molluscs, worms and kin", "splitMa": 600, "species": 1300000 },
+    { "id": "deuterostomes", "parent": "bilaterians", "name": "Deuterostomes", "splitMa": 600 },
+
+    { "id": "echinoderms", "parent": "deuterostomes", "name": "Starfish and sea urchins", "splitMa": 570, "species": 7500 },
+    { "id": "chordates", "parent": "deuterostomes", "name": "Chordates", "splitMa": 570 },
+
+    { "id": "tunicates-lancelets", "parent": "chordates", "name": "Sea squirts and lancelets", "splitMa": 550, "species": 3100 },
+    { "id": "vertebrates", "parent": "chordates", "name": "Vertebrates", "splitMa": 550 },
+
+    { "id": "jawless-fish", "parent": "vertebrates", "name": "Lampreys and hagfish", "splitMa": 500, "species": 120 },
+    { "id": "jawed-vertebrates", "parent": "vertebrates", "name": "Jawed vertebrates", "splitMa": 500 },
+
+    { "id": "cartilaginous-fish", "parent": "jawed-vertebrates", "name": "Sharks and rays", "splitMa": 460, "species": 1200 },
+    { "id": "bony-vertebrates", "parent": "jawed-vertebrates", "name": "Bony vertebrates", "splitMa": 460 },
+
+    { "id": "ray-finned-fish", "parent": "bony-vertebrates", "name": "Ray-finned fish", "splitMa": 430, "species": 33000 },
+    { "id": "lobe-finned", "parent": "bony-vertebrates", "name": "Lobe-finned vertebrates", "splitMa": 430 },
+
+    { "id": "amphibians", "parent": "lobe-finned", "name": "Amphibians", "splitMa": 350, "species": 8700 },
+    { "id": "amniotes", "parent": "lobe-finned", "name": "Amniotes", "splitMa": 350 },
+
+    { "id": "reptiles-birds", "parent": "amniotes", "name": "Reptiles and birds", "splitMa": 320, "species": 22000 },
+    { "id": "mammals", "parent": "amniotes", "name": "Mammals", "splitMa": 320 },
+
+    { "id": "monotremes", "parent": "mammals", "name": "Platypus and echidnas", "splitMa": 180, "species": 5 },
+    { "id": "therians", "parent": "mammals", "name": "Therian mammals", "splitMa": 180 },
+
+    { "id": "marsupials", "parent": "therians", "name": "Marsupials", "splitMa": 160, "species": 380 },
+    { "id": "placentals", "parent": "therians", "name": "Placental mammals", "splitMa": 160 },
+
+    { "id": "other-placentals", "parent": "placentals", "name": "Whales, bats, elephants and kin", "splitMa": 95, "species": 3200 },
+    { "id": "euarchontoglires", "parent": "placentals", "name": "Euarchontoglires", "splitMa": 95 },
+
+    { "id": "rodents-rabbits", "parent": "euarchontoglires", "name": "Rodents and rabbits", "splitMa": 90, "species": 2900 },
+    { "id": "primates", "parent": "euarchontoglires", "name": "Primates", "splitMa": 90 },
+
+    { "id": "lemurs-lorises", "parent": "primates", "name": "Lemurs and lorises", "splitMa": 70, "species": 150 },
+    { "id": "haplorhines", "parent": "primates", "name": "Haplorhine primates", "splitMa": 70 },
+
+    { "id": "new-world-monkeys", "parent": "haplorhines", "name": "New World monkeys", "splitMa": 43, "species": 170 },
+    { "id": "catarrhines", "parent": "haplorhines", "name": "Old World monkeys and apes", "splitMa": 43 },
+
+    { "id": "old-world-monkeys", "parent": "catarrhines", "name": "Old World monkeys", "splitMa": 28, "species": 160 },
+    { "id": "apes", "parent": "catarrhines", "name": "Apes", "splitMa": 28 },
+
+    { "id": "gibbons", "parent": "apes", "name": "Gibbons", "splitMa": 18, "species": 20 },
+    { "id": "great-apes", "parent": "apes", "name": "Great apes", "splitMa": 18 },
+
+    { "id": "orangutans", "parent": "great-apes", "name": "Orangutans", "splitMa": 15, "species": 3 },
+    { "id": "african-apes", "parent": "great-apes", "name": "African apes", "splitMa": 15 },
+
+    { "id": "gorillas", "parent": "african-apes", "name": "Gorillas", "splitMa": 8.5, "species": 2 },
+    { "id": "hominini", "parent": "african-apes", "name": "Hominini", "splitMa": 8.5 },
+
+    { "id": "chimpanzees", "parent": "hominini", "name": "Chimpanzees and bonobos", "splitMa": 6.5, "species": 2 },
+    { "id": "homo-sapiens", "parent": "hominini", "name": "Humans", "splitMa": 6.5, "species": 1 }
+  ]
+}

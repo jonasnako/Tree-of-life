@@ -1,13 +1,21 @@
-// On-screen counter and controls (play/pause, restart, speed).
+// On-screen counter and controls (play/pause, restart, speed),
+// plus a caption naming the latest fork on the followed lineage.
 import { eonAt } from './data.js';
 
 const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const fmt1 = new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
-export function createUI(clock) {
+export const formatMa = (ma) => (ma <= 0.05 ? '0' : ma < 10 ? fmt1.format(ma) : fmt.format(ma));
+
+/**
+ * @param {import('./clock.js').GrowthClock} clock
+ * @param {{ma: number, text: string}[]} events forks on the followed lineage, oldest first
+ */
+export function createUI(clock, events = []) {
   const maEl = document.getElementById('ma');
   const unitEl = document.getElementById('ma-unit');
   const eonEl = document.getElementById('eon');
+  const eventEl = document.getElementById('event');
   const playBtn = document.getElementById('play');
   const restartBtn = document.getElementById('restart');
   const speedInput = document.getElementById('speed');
@@ -39,17 +47,26 @@ export function createUI(clock) {
   });
 
   let lastText = '';
+  let lastEvent = null;
   function update() {
     const ma = clock.ma;
-    let text;
-    if (ma <= 0.05) text = '0';
-    else if (ma < 10) text = fmt1.format(ma);
-    else text = fmt.format(ma);
+    const text = formatMa(ma);
     if (text !== lastText) {
       maEl.textContent = text;
       unitEl.textContent = ma <= 0.05 ? 'million years ago · today' : 'million years ago';
       eonEl.textContent = eonAt(ma);
       lastText = text;
+    }
+    let current = null;
+    for (const e of events) if (e.ma >= ma) current = e;
+    if (current !== lastEvent) {
+      lastEvent = current;
+      eventEl.classList.remove('show');
+      if (current) {
+        eventEl.innerHTML = `<span class="event-ma">${formatMa(current.ma)} Ma</span> ${current.text}`;
+        void eventEl.offsetWidth; // restart the fade
+        eventEl.classList.add('show');
+      }
     }
   }
 

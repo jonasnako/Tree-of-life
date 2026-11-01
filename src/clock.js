@@ -1,22 +1,16 @@
 // Global growth clock, measured in millions of years ago (Ma).
-// Runs from `startMa` down to `endMa`. Step 1 runs at a constant rate; the
-// non-linear time scale from the brief can replace `rateAt()` later without
-// touching anything that reads `clock.ma`.
+// Runs from `startMa` down to `endMa`. The speed in Ma per second comes from
+// `rateAt(ma)`, so time can run non-linearly while `clock.ma` stays real.
 
 export class GrowthClock {
-  constructor({ startMa, endMa, baseRate = 100 }) {
+  constructor({ startMa, endMa, rateAt = () => 100 }) {
     this.startMa = startMa;
     this.endMa = endMa;
-    this.baseRate = baseRate; // Ma per real second at speed 1×
+    this.rateAt = rateAt; // (ma) => Ma per real second at speed 1×
     this.speed = 1;
     this.ma = startMa;
     this.playing = true;
     this.listeners = new Set();
-  }
-
-  /** Ma advanced per real second at the given moment. Hook for non-linear time. */
-  rateAt(/* ma */) {
-    return this.baseRate;
   }
 
   update(dt) {

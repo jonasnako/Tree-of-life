@@ -1,21 +1,24 @@
-// Orbit camera that gently follows the growing tip.
-// While you drag or zoom it hands control to you, then eases back after a pause.
+// Orbit camera that frames the growing tree.
+// During growth it keeps the whole tree in view while leaning toward the
+// tip of the followed lineage; when time reaches today it pulls back to the
+// whole tree. While you drag or zoom it hands control to you, then eases
+// back after a pause.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const RESUME_AFTER = 4; // seconds of no input before auto-follow resumes
+const RESUME_AFTER = 4; // seconds of no input before auto-framing resumes
 
 export function createCamera(canvas) {
-  const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 400);
-  camera.position.set(3.2, 1.6, 4.2);
+  const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.05, 500);
+  camera.position.set(0.9, 0.45, 1.3);
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.minDistance = 2;
-  controls.maxDistance = 80;
+  controls.minDistance = 0.4;
+  controls.maxDistance = 120;
   controls.maxPolarAngle = Math.PI * 0.495; // stay above the ground
-  controls.target.set(0, 0.8, 0);
+  controls.target.set(0, 0.15, 0);
 
   let idle = Infinity;
   let interacting = false;
@@ -25,23 +28,24 @@ export function createCamera(canvas) {
 
   const desiredTarget = new THREE.Vector3();
   const offset = new THREE.Vector3();
+  const before = new THREE.Vector3();
 
   /**
    * @param {number} dt seconds
-   * @param {{base: THREE.Vector3, tip: THREE.Vector3}} focus
+   * @param {{center: THREE.Vector3, radius: number, tip: THREE.Vector3, finished: boolean}} view
    */
-  function update(dt, focus) {
+  function update(dt, view) {
     if (!interacting) idle += dt;
     if (!interacting && idle > RESUME_AFTER) {
-      const k = 1 - Math.exp(-dt * 1.5);
-      // Look a little below the tip so the whole branch stays in view.
-      desiredTarget.lerpVectors(focus.base, focus.tip, 0.6);
-      const height = focus.tip.distanceTo(focus.base);
-      const desiredDistance = THREE.MathUtils.clamp(5 + height * 1.5, 5, 70);
+      const k = 1 - Math.exp(-dt * (view.finished ? 0.8 : 1.6));
+      const lean = view.finished ? 0 : 0.45;
+      desiredTarget.lerpVectors(view.center, view.tip, lean);
+      const fit = view.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.min(1, camera.aspect);
+      const desiredDistance = THREE.MathUtils.clamp(0.4 + fit * (view.finished ? 1.25 : 0.95), 0.9, 110);
 
-      const before = controls.target.clone();
+      before.copy(controls.target);
       controls.target.lerp(desiredTarget, k);
-      camera.position.add(controls.target.clone().sub(before)); // pan with the target
+      camera.position.add(before.subVectors(controls.target, before)); // pan with the target
 
       offset.subVectors(camera.position, controls.target);
       const dist = offset.length();

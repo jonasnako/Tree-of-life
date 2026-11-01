@@ -1,72 +1,108 @@
-// Step 1: a single organic branch growing from the origin of life to today.
+// Step 2: a branching tree grown from a hand-made file of the human lineage.
+// It starts as a seedling with two seed leaves; young shoots are green and
+// leafy, and wood thickens and turns to bark as it ages.
 import * as THREE from 'three';
-import { nodes, TIME_START_MA, TIME_END_MA } from './data.js';
+import { loadTree, TIME_START_MA, TIME_END_MA } from './data.js';
 import { GrowthClock } from './clock.js';
+import { depthAt, depthPerMa } from './timeScale.js';
 import { createScene, handleResize } from './scene.js';
 import { createCamera } from './camera.js';
 import { createUI } from './ui.js';
-import { Branch } from './tree/Branch.js';
+import { addPlaceholderForks, layoutTree, locate } from './tree/layout.js';
+import { createTreeMesh } from './tree/treeMesh.js';
+import { createLeaves } from './tree/leaves.js';
 import { createBarkTextures } from './tree/barkTexture.js';
 
+const RUN_SECONDS = 60; // seed to today at 1×
+
 const canvas = document.getElementById('scene');
-const { renderer, scene } = createScene(canvas);
+const { renderer, scene, sun } = createScene(canvas);
 const { camera, update: updateCamera } = createCamera(canvas);
 handleResize(renderer, camera);
 
-const clock = new GrowthClock({ startMa: TIME_START_MA, endMa: TIME_END_MA, baseRate: 100 });
-const ui = createUI(clock);
+// Data -> layout -> meshes.
+const tree = loadTree();
+addPlaceholderForks(tree);
+const branches = layoutTree(tree);
+const treeMesh = createTreeMesh(branches, createBarkTextures());
+const leaves = createLeaves(branches);
+scene.add(treeMesh.mesh, leaves.group);
 
-// Bark material shared by all branches.
-const bark = createBarkTextures();
-bark.map.repeat.set(2, 1);
-bark.bumpMap.repeat.set(2, 1);
-const barkMaterial = new THREE.MeshStandardMaterial({
-  map: bark.map,
-  bumpMap: bark.bumpMap,
-  bumpScale: 4,
-  roughness: 0.95,
-  metalness: 0,
-  color: '#ffffff',
+// Depth grows at a steady visual pace; the counter shows real Ma.
+const clock = new GrowthClock({
+  startMa: TIME_START_MA,
+  endMa: TIME_END_MA,
+  rateAt: (ma) => 1 / RUN_SECONDS / depthPerMa(ma),
 });
 
-const node = nodes[0];
-const branch = new Branch({
-  id: node.id,
-  origin: new THREE.Vector3(0, -0.2, 0),
-  direction: new THREE.Vector3(0, 1, 0),
-  length: 14,
-  radius: 0.6,
-  material: barkMaterial,
-});
-scene.add(branch.mesh);
+// Captions for each fork on the followed lineage.
+const events = [];
+for (let i = 1; i < tree.lineage.length; i++) {
+  const node = tree.lineage[i];
+  const sisters = node.parentNode.children.filter((c) => c !== node && !c.placeholder);
+  events.push({ ma: node.splitMa, text: `${sisters.map((s) => s.name).join(', ')} branch off` });
+}
+const ui = createUI(clock, events);
 
-// A small, glowing green bud marks the growing tip.
-const bud = new THREE.Mesh(
-  new THREE.SphereGeometry(1, 20, 14),
-  new THREE.MeshStandardMaterial({ color: '#8fcf4a', emissive: '#4f8f1c', emissiveIntensity: 0.6, roughness: 0.5 }),
-);
-bud.scale.set(0.05, 0.08, 0.05);
-bud.castShadow = true;
-scene.add(bud);
+// Framing helpers.
+const tip = new THREE.Vector3();
+const box = new THREE.Box3();
+const sphere = new THREE.Sphere();
+const tmp = new THREE.Vector3();
+function pointAt(branch, depth, out) {
+  const { i, t } = locate(branch, depth);
+  return out.lerpVectors(branch.points[i], branch.points[i + 1], t);
+}
+function frameTree(now) {
+  box.makeEmpty();
+  box.expandByPoint(tmp.set(0, 0, 0));
+  for (const br of branches) {
+    if (br.depths[0] > now) continue;
+    box.expandByPoint(pointAt(br, Math.min(now, br.depths.at(-1)), tmp));
+  }
+  box.getBoundingSphere(sphere);
+  sphere.radius = Math.max(sphere.radius, 0.25) + 0.35; // room for leaves
+  const lineageNode = tree.lineage.findLast((n) => n.branch.depths[0] <= now) ?? tree.root;
+  pointAt(lineageNode.branch, now, tip);
+}
 
-const base = new THREE.Vector3(0, 0, 0);
+// Keep sun shadows sharp by fitting the shadow box to the tree.
+const sunDir = sun.position.clone().normalize();
+function fitShadows() {
+  const r = sphere.radius + 1;
+  const cam = sun.shadow.camera;
+  cam.left = cam.bottom = -r;
+  cam.right = cam.top = r;
+  cam.near = 0.1;
+  cam.far = r * 4 + 40;
+  cam.updateProjectionMatrix();
+  sun.target.position.copy(sphere.center);
+  sun.position.copy(sphere.center).addScaledVector(sunDir, r * 2 + 20);
+}
+
 let lastTime = null;
-
 function frame(time) {
   // Clamp so a background tab or a slow frame never jumps (or reverses) time.
   const dt = lastTime === null ? 0 : Math.min(Math.max((time - lastTime) / 1000, 0), 0.1);
   lastTime = time;
 
   clock.update(dt);
-  const growth = (node.splitMa - clock.ma) / (node.splitMa - TIME_END_MA);
-  if (growth !== branch.growth) branch.setGrowth(growth);
-  bud.position.copy(branch.tip);
-  bud.scale.set(0.05, 0.08, 0.05).multiplyScalar(0.45 + 0.55 * Math.sqrt(branch.growth));
-  bud.visible = branch.growth > 0.0005;
+  const now = depthAt(clock.ma);
+  treeMesh.setDepth(now);
+  leaves.update(now);
 
-  updateCamera(dt, { base, tip: branch.tip });
+  frameTree(now);
+  fitShadows();
+  updateCamera(dt, { center: sphere.center, radius: sphere.radius, tip, finished: clock.finished });
+  const dist = camera.position.distanceTo(sphere.center);
+  scene.fog.near = dist * 1.6 + 6;
+  scene.fog.far = dist * 5 + 40;
+
   ui.update();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// Handy from the browser console, e.g. treeOfLife.clock.ma = 600.
+window.treeOfLife = { clock, tree };
