@@ -80,6 +80,7 @@ attribute float aDepth;
 attribute float aRadius;
 attribute float aAngle;
 attribute float aPath;
+attribute float aBarkR;
 attribute vec2 aBurl;
 attribute vec3 aTangent;
 uniform float uNow;
@@ -140,7 +141,7 @@ vHeight = position.y;
 vGroove = clamp(-off.x * 2.5, 0.0, 1.0);
 // Bark lives on the full-grown cylinder, so its pattern stays put (and
 // cracks open) as the wood thickens. Plates are longer than wide.
-vBarkP = vec3(cos(aAngle) * aRadius * 7.0, sin(aAngle) * aRadius * 7.0, aPath * 1.3);
+vBarkP = vec3(cos(aAngle) * aBarkR * 7.0, sin(aAngle) * aBarkR * 7.0, aPath * 1.3);
 // Cheap ambient occlusion: wood deep in the crown and at the ground sees less sky.
 float crownDist = length(position - uCrown.xyz) / max(uCrown.w, 0.5);
 vWoodAO = mix(0.55, 1.0, smoothstep(0.15, 0.9, crownDist)) * mix(0.6, 1.0, smoothstep(-0.2, 0.7, position.y));
@@ -265,6 +266,7 @@ function buildGeometry(branches) {
   const aRadius = new Float32Array(vertexCount);
   const aAngle = new Float32Array(vertexCount);
   const aPath = new Float32Array(vertexCount);
+  const aBarkR = new Float32Array(vertexCount);
   const aBurl = new Float32Array(vertexCount * 2);
   const index = new Uint32Array(indexCount);
   const UP = new THREE.Vector3(0, 1, 0);
@@ -312,6 +314,7 @@ function buildGeometry(branches) {
         aRadius[v] = br.radii[i] * fin;
         aAngle[v] = a;
         aPath[v] = path;
+        aBarkR[v] = br.barkRadii[i];
         aBurl[v * 2] = burl;
         aBurl[v * 2 + 1] = burlDa;
         v++;
@@ -340,6 +343,7 @@ function buildGeometry(branches) {
   geometry.setAttribute('aRadius', new THREE.BufferAttribute(aRadius, 1));
   geometry.setAttribute('aAngle', new THREE.BufferAttribute(aAngle, 1));
   geometry.setAttribute('aPath', new THREE.BufferAttribute(aPath, 1));
+  geometry.setAttribute('aBarkR', new THREE.BufferAttribute(aBarkR, 1));
   geometry.setAttribute('aBurl', new THREE.BufferAttribute(aBurl, 2));
   geometry.setIndex(new THREE.BufferAttribute(index, 1));
   return geometry;

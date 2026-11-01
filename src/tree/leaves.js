@@ -9,7 +9,11 @@
 //
 // Kinds of leaves:
 //   shoot leaves  - born at a fixed depth just behind the tip, live LEAF_LIFE
-//   tufts, sprays - ride the growing tip of a branch, stay on living tips
+//   tip leaves    - ride the growing tip of a branch and stay on living tips:
+//                   one leaf per species (a one-species tip ends in exactly
+//                   one leaf), up to TUFT_MAX
+//   sprays        - extra foliage for rich clades alive today; they fill in
+//                   slowly as the clade ages, standing for leaves too many to draw
 //   seed leaves   - the seedling's two cotyledons (2 instances, CPU)
 import * as THREE from 'three';
 import { createRandom } from '../random.js';
@@ -27,7 +31,7 @@ export const leafLight = {
 export const LEAF_LIFE = 0.14; // depth units a shoot leaf lives
 const LEAF_SPACING = 0.16; // world units between leaves along a shoot
 const UNFOLD = 0.006; // depth units to unfold
-const TUFT = 8; // leaves around each growing tip
+const TUFT_MAX = 10; // leaves at a tip: one per species, up to this many
 const SPRAY_REACH = 0.03; // depth behind a growing tip that carries sprays
 const COTYLEDON_HEIGHT = 0.32; // world units up the seedling stem
 
@@ -55,18 +59,26 @@ export function createLeaves(branches, branchTex) {
       const dist = (k + rand.range(0.3, 0.9)) * LEAF_SPACING;
       const depth = d0 + (dist / br.length) * (d1 - d0);
       const angle = k * 2.39996 + rand.range(-0.3, 0.3); // golden-angle phyllotaxis
-      leafInst.push([br, 0, depth, angle, rand.range(0.7, 1.15), rand.range(0.3, 0.42), rand.range(-0.03, 0.03)]);
+      leafInst.push([br, 0, depth, angle, rand.range(0.7, 1.15), rand.range(0.2, 0.28), rand.range(-0.03, 0.03)]);
       slots.push({ br, depth, angle });
     }
     rand = createRandom(`${br.node.id}-tuft`);
-    for (let k = 0; k < TUFT; k++) {
-      leafInst.push([br, 1, (k / TUFT) * 0.006 + 0.0006, k * 2.39996 + rand.range(-0.3, 0.3), rand.range(0.35, 0.8), rand.range(0.24, 0.36), rand.range(-0.03, 0.03)]);
+    const species = br.node.species ?? 1;
+    const living = !br.node.children.length && !br.node.endMa;
+    if (species === 1) {
+      // A single species: one leaf, right at the tip.
+      leafInst.push([br, 1, 0.0003, 0, 0.12, 0.26, 0.02]);
+    } else {
+      const tips = Math.min(species, TUFT_MAX);
+      for (let k = 0; k < tips; k++) {
+        leafInst.push([br, 1, (k / tips) * 0.006 + 0.0006, k * 2.39996 + rand.range(-0.3, 0.3), rand.range(0.35, 0.8), rand.range(0.16, 0.24), rand.range(-0.03, 0.03)]);
+      }
     }
     rand = createRandom(`${br.node.id}-sprays`);
     const richness = Math.log10((br.node.species ?? 1) + 1);
-    const sprays = Math.round(THREE.MathUtils.clamp(5 + richness * 3, 5, 22));
+    const sprays = living && species > TUFT_MAX ? Math.round(THREE.MathUtils.clamp(2.5 * Math.log10(species / TUFT_MAX), 1, 16)) : 0;
     for (let k = 0; k < sprays; k++) {
-      sprayInst.push([br, 1, rand() ** 1.5 * SPRAY_REACH, rand.range(0, Math.PI * 2), rand.range(0.35, 1.25), rand.range(0.55, 0.95) * (0.85 + 0.12 * richness), rand.range(-0.06, 0.05)]);
+      sprayInst.push([br, 1, rand() ** 1.5 * SPRAY_REACH, rand.range(0, Math.PI * 2), rand.range(0.35, 1.25), rand.range(0.4, 0.65) * (0.85 + 0.1 * richness), rand.range(-0.06, 0.05)]);
     }
   }
 
@@ -261,7 +273,11 @@ void computeLeaf(out vec3 outPos, out vec3 outNormal) {
     float onTip = step(d0, uNow) * max(step(uNow, d1 + 1e-6), aMode.z);
     depth = min(uNow, d1) - aMode.y * min(1.0, (d1 - d0) / ${SPRAY_REACH.toFixed(3)});
     shown = onTip * step(d0, depth);
-    open = smoothstep(0.0, 0.01, uNow - d0);
+    #ifdef SPRAY_LEAVES
+      open = smoothstep(0.0, 0.08, uNow - d0); // foliage fills in slowly
+    #else
+      open = smoothstep(0.0, 0.008, uNow - d0);
+    #endif
     scale = 0.25 + 0.75 * open;
     #ifdef SPRAY_LEAVES
       vLeafColor = mix(${glslColor(MATURE)}, ${glslColor(FRESH)}, clamp(0.35 + aShape.w * 3.0, 0.0, 1.0)) * (1.0 + aShape.w);

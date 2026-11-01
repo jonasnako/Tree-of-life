@@ -10,7 +10,8 @@
   <body>
     <canvas id="scene"></canvas>
 
-    <div class="focus-label" id="focus-label" aria-hidden="true"><span class="focus-dot"></span><span class="focus-name"></span></div>
+    <svg class="callout-lines" id="callout-lines" aria-hidden="true"></svg>
+    <div class="callouts" id="callouts" aria-live="polite"></div>
 
     <div class="hud">
       <div class="counter" aria-live="off">
@@ -18,7 +19,6 @@
         <div class="counter-unit" id="ma-unit">million years ago</div>
         <div class="counter-eon" id="eon">Archean</div>
       </div>
-      <div class="event" id="event" aria-live="polite"></div>
     </div>
 
     <label class="follow">

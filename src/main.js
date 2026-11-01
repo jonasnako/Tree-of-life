@@ -9,7 +9,8 @@ import { GrowthClock } from './clock.js';
 import { depthAt, depthPerMa, setOrigin } from './timeScale.js';
 import { createScene, handleResize } from './scene.js';
 import { createCamera } from './camera.js';
-import { createUI } from './ui.js';
+import { createUI, formatMa } from './ui.js';
+import { createCallouts } from './callouts.js';
 import { addPlaceholderForks, layoutTree, locate } from './tree/layout.js';
 import { createTreeMesh } from './tree/treeMesh.js';
 import { createLeaves, leafLight } from './tree/leaves.js';
@@ -42,19 +43,47 @@ const clock = new GrowthClock({
   rateAt: (ma) => 1 / RUN_SECONDS / depthPerMa(ma),
 });
 
-// Captions for each fork on the followed lineage.
+// Forks on the followed lineage: each new sister lineage gets a callout
+// pointing at its branch, and a tick on the timeline.
 const displayName = (n) => (n.common ? `${n.common} (${n.name})` : n.name);
+const speciesFmt = new Intl.NumberFormat('en-US');
 function lineageEvents() {
   const events = [];
   for (let i = 1; i < tree.lineage.length; i++) {
     const node = tree.lineage[i];
-    const sisters = node.parentNode.children.filter((c) => c !== node && !c.placeholder);
+    const sisters = node.parentNode.children.filter((c) => c !== node && !c.placeholder).sort((a, b) => b.species - a.species);
     if (!sisters.length) continue;
-    const names = sisters.slice(0, 3).map(displayName);
-    const more = sisters.length > 3 ? ` and ${sisters.length - 3} more` : '';
-    events.push({ ma: node.splitMa, text: `${names.join(', ')}${more} branch off` });
+    events.push({ ma: node.splitMa, sister: sisters[0], others: sisters.length - 1 });
   }
   return events;
+}
+const SHOWN_FORKS = 3; // the most recent forks keep their callouts
+const callouts = createCallouts();
+const anchor = new THREE.Vector3();
+function updateCallouts(now) {
+  const list = [];
+  const past = ui.events.filter((e) => e.ma >= clock.ma).slice(-SHOWN_FORKS);
+  past.forEach((e, k) => {
+    const br = e.sister.branch;
+    const d0 = br.depths[0];
+    const d1 = br.depths.at(-1);
+    // Point partway along the new branch, never past its growing tip.
+    const depth = Math.min(now, d0 + (d1 - d0) * 0.45, d1);
+    pointAt(br, Math.max(d0, depth), anchor);
+    const fresh = Math.min(1, (now - d0) / 0.004);
+    const sub = `${formatMa(e.ma)} Ma · ${speciesFmt.format(e.sister.species)} species${e.others ? ` · +${e.others} more lineage${e.others > 1 ? 's' : ''}` : ''}`;
+    list.push({ key: e.sister.id, title: displayName(e.sister), sub, anchor: anchor.clone(), alpha: fresh * [0.55, 0.75, 1][k + SHOWN_FORKS - past.length] });
+  });
+  // The followed species: its own single leaf at the tip of its twig.
+  if (clock.ma <= tree.focus.splitMa) {
+    const br = tree.focus.branch;
+    const end = Math.min(now, br.depths.at(-1));
+    pointAt(br, end, anchor);
+    const { i } = locate(br, end);
+    anchor.addScaledVector(br.tangents[i + 1] ?? br.tangents[i], 0.12);
+    list.push({ key: 'focus', kind: 'focus', title: tree.focusLabel, sub: tree.focus.name, anchor: anchor.clone() });
+  }
+  callouts.update(list, camera, sphere.center);
 }
 const ui = createUI(clock, lineageEvents());
 
@@ -64,7 +93,6 @@ for (const s of tree.showcase) focusSelect.add(new Option(s.label, s.key, false,
 focusSelect.addEventListener('change', () => {
   setFocus(tree, focusSelect.value);
   ui.setEvents(lineageEvents());
-  focusLabel.querySelector('.focus-name').textContent = `${tree.focusLabel} · ${tree.focus.name}`;
   clock.restart();
 });
 
@@ -104,20 +132,6 @@ function fitShadows() {
   sun.position.copy(sphere.center).addScaledVector(sunDir, r * 2 + 20);
 }
 
-// A label on the followed leaf once its lineage stands on its own.
-const focusLabel = document.getElementById('focus-label');
-focusLabel.querySelector('.focus-name').textContent = `${tree.focusLabel} · ${tree.focus.name}`;
-const labelPos = new THREE.Vector3();
-function placeFocusLabel() {
-  const show = clock.ma <= tree.focus.splitMa;
-  focusLabel.classList.toggle('show', show);
-  if (!show) return;
-  labelPos.copy(tip).project(camera);
-  const x = (labelPos.x * 0.5 + 0.5) * window.innerWidth;
-  const y = (-labelPos.y * 0.5 + 0.5) * window.innerHeight;
-  focusLabel.style.transform = `translate(${x}px, ${y}px)`;
-}
-
 let lastTime = null;
 function frame(time) {
   // Clamp so a background tab or a slow frame never jumps (or reverses) time.
@@ -143,7 +157,7 @@ function frame(time) {
   camera.updateMatrixWorld();
   leafLight.uSunView.value.copy(sunDir).transformDirection(camera.matrixWorldInverse);
   leafLight.uCrown.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
-  placeFocusLabel();
+  updateCallouts(now);
 
   ui.update();
   renderer.render(scene, camera);

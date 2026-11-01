@@ -1,5 +1,5 @@
 // On-screen counter and controls (time slider, play/pause, restart, speed),
-// plus a caption naming the latest fork on the followed lineage.
+// plus timeline ticks for the forks on the followed lineage.
 import { eonAt } from './data.js';
 import { depthAt, maAtDepth } from './timeScale.js';
 
@@ -10,13 +10,12 @@ export const formatMa = (ma) => (ma <= 0.05 ? '0' : ma < 10 ? fmt1.format(ma) : 
 
 /**
  * @param {import('./clock.js').GrowthClock} clock
- * @param {{ma: number, text: string}[]} events forks on the followed lineage, oldest first
+ * @param {{ma: number}[]} events forks on the followed lineage, oldest first
  */
 export function createUI(clock, events = []) {
   const maEl = document.getElementById('ma');
   const unitEl = document.getElementById('ma-unit');
   const eonEl = document.getElementById('eon');
-  const eventEl = document.getElementById('event');
   const playBtn = document.getElementById('play');
   const restartBtn = document.getElementById('restart');
   const speedInput = document.getElementById('speed');
@@ -36,7 +35,7 @@ export function createUI(clock, events = []) {
         return mark;
       }),
     );
-    lastEvent = undefined;
+    api.events = events;
   }
   let scrubbing = false;
   let resumeAfterScrub = false;
@@ -87,7 +86,7 @@ export function createUI(clock, events = []) {
   });
 
   let lastText = '';
-  let lastEvent = null;
+  const api = { update, setEvents, events };
   setEvents(events);
   function update() {
     const ma = clock.ma;
@@ -100,18 +99,7 @@ export function createUI(clock, events = []) {
       eonEl.textContent = eonAt(ma);
       lastText = text;
     }
-    let current = null;
-    for (const e of events) if (e.ma >= ma) current = e;
-    if (current !== lastEvent) {
-      lastEvent = current;
-      eventEl.classList.remove('show');
-      if (current) {
-        eventEl.innerHTML = `<span class="event-ma">${formatMa(current.ma)} Ma</span> ${current.text}`;
-        void eventEl.offsetWidth; // restart the fade
-        eventEl.classList.add('show');
-      }
-    }
   }
 
-  return { update, setEvents };
+  return api;
 }

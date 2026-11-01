@@ -91,7 +91,7 @@ export function createLeafFall(branches) {
       p.spinAxis.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
       p.spin = 1.5 + Math.random() * 3;
       p.q.setFromAxisAngle(p.spinAxis, Math.random() * 6.28);
-      p.size = 0.2 + Math.random() * 0.12;
+      p.size = 0.14 + Math.random() * 0.08;
       p.phase = Math.random() * 6.28;
       p.rest = 0;
     }
@@ -152,7 +152,7 @@ function placeLitter(litter, branches) {
     const gz = (rand() + rand() + rand() - 1.5) * spread * 1.4;
     pos.set(p.x + gx, 0.012 + rand() * 0.012, p.z + gz);
     q.setFromAxisAngle(up, rand() * Math.PI * 2);
-    const s = rand.range(0.26, 0.4);
+    const s = rand.range(0.16, 0.24);
     m4.compose(pos, q, scl.set(s, s, s));
     litter.setMatrixAt(k, m4);
     fallen[k] = br.depths[i] + LEAF_LIFE * rand.range(0.9, 1.6);

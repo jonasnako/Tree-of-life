@@ -111,6 +111,9 @@ export function layoutTree(tree) {
       const collar = leader ? 1 : 1 + 0.35 * Math.exp(-dist * 4);
       return THREE.MathUtils.lerp(rSelf, rEnd, u) * flare * collar;
     });
+    // The bark pattern follows the plain pipe radius, which runs on smoothly
+    // from a branch into its leader (flares and collars would make a seam).
+    branch.barkRadii = branch.depths.map((_, i) => THREE.MathUtils.lerp(rSelf, rEnd, i / (branch.depths.length - 1)));
     branches.push(branch);
 
     // Children.
@@ -156,7 +159,7 @@ function addRoots(branches, rootSpecies) {
     const length = rand.range(4, 9);
     const s0 = 0.02 + k * 0.012;
     const s1 = rand.range(0.8, 0.97);
-    const start = out.clone().multiplyScalar(trunkR * 0.3).setY(0.6);
+    const start = out.clone().multiplyScalar(trunkR * 0.12).setY(0.5);
     const dir = out.clone().setY(-0.35).normalize();
     const br = buildCenterline(node, start, dir, length, s0, s1, createRandom(node.id), null, 0, true);
     // Hug the ground: dive from the buttress into the soil, then run just under the surface.
@@ -166,6 +169,7 @@ function addRoots(branches, rootSpecies) {
       const d = br.dists[i];
       p.y = Math.max(-br.radii[i] * 0.45, 0.6 * Math.exp(-d * 1.1) - br.radii[i] * 0.45);
     });
+    br.barkRadii = br.radii.map(() => trunkR);
     br.node = node;
     br.isRoot = true;
     br.fin = 1.9; // buttress: taller than wide near the trunk
