@@ -1,0 +1,106 @@
+:root {
+  --ink: #2b2a22;
+  --ink-soft: rgba(43, 42, 34, 0.62);
+  --panel: rgba(255, 252, 240, 0.62);
+  --panel-border: rgba(255, 255, 255, 0.55);
+  --accent: #5b7d3a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #cfdcd2;
+  color: var(--ink);
+  font-family: ui-serif, Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#scene {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+.hud {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  left: 16px;
+  pointer-events: none;
+}
+
+.counter-value {
+  font-size: clamp(40px, 9vw, 72px);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  text-shadow: 0 1px 12px rgba(255, 250, 230, 0.6);
+}
+
+.counter-unit {
+  margin-top: 6px;
+  font-size: 15px;
+  color: var(--ink-soft);
+}
+
+.counter-eon {
+  margin-top: 2px;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--accent);
+}
+
+.controls {
+  position: fixed;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 8px 8px;
+  max-width: calc(100vw - 32px);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 6px 24px rgba(40, 50, 30, 0.15);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 13px;
+}
+
+.btn {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.btn:hover { background: #fff; }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn svg { width: 20px; height: 20px; fill: currentColor; }
+
+#play .icon-play { display: none; }
+#play.paused .icon-play { display: block; }
+#play.paused .icon-pause { display: none; }
+
+.speed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.speed span { color: var(--ink-soft); }
+.speed input { width: clamp(80px, 30vw, 180px); accent-color: var(--accent); }
+.speed output { width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
