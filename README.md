@@ -20,6 +20,7 @@ Open the address it prints (usually http://localhost:5173). `npm run dev` also p
 - Drag to orbit, scroll or pinch to zoom, right-drag to pan. The camera follows the growing tip again after 4 seconds without input.
 - Space bar: play/pause.
 - Speed slider: 0.1× to 10×. At 1×, seed to today takes 60 seconds; the counter races through the early eons and slows for recent forks.
+- Time slider: drag (or use the arrow keys) to move through time; it pauses while you drag and carries on playing after. Its scale matches the growth pace, and ticks mark the forks on the human lineage.
 - Console: `treeOfLife.clock.ma = 600` jumps to 600 Ma.
 - The camera follows the human lineage's growing tip and slowly circles; at today it pulls back to the whole tree.
 

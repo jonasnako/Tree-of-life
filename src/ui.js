@@ -1,6 +1,7 @@
-// On-screen counter and controls (play/pause, restart, speed),
+// On-screen counter and controls (time slider, play/pause, restart, speed),
 // plus a caption naming the latest fork on the followed lineage.
 import { eonAt } from './data.js';
+import { depthAt, maAtDepth } from './timeScale.js';
 
 const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const fmt1 = new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -20,6 +21,39 @@ export function createUI(clock, events = []) {
   const restartBtn = document.getElementById('restart');
   const speedInput = document.getElementById('speed');
   const speedOut = document.getElementById('speed-value');
+  const timeInput = document.getElementById('time');
+  const marksEl = document.getElementById('timeline-marks');
+
+  // Time slider. Positions are in depth, so recent forks get room.
+  const SLIDER_MAX = Number(timeInput.max);
+  for (const e of events) {
+    const mark = document.createElement('span');
+    mark.className = 'timeline-mark';
+    mark.style.left = `${depthAt(e.ma) * 100}%`;
+    marksEl.append(mark);
+  }
+  let scrubbing = false;
+  let resumeAfterScrub = false;
+  const startScrub = () => {
+    if (scrubbing) return;
+    scrubbing = true;
+    resumeAfterScrub = clock.playing;
+    clock.setPlaying(false);
+  };
+  const endScrub = () => {
+    if (!scrubbing) return;
+    scrubbing = false;
+    if (resumeAfterScrub && !clock.finished) clock.setPlaying(true);
+  };
+  timeInput.addEventListener('pointerdown', startScrub);
+  timeInput.addEventListener('pointerup', endScrub);
+  timeInput.addEventListener('pointercancel', endScrub);
+  timeInput.addEventListener('change', endScrub);
+  timeInput.addEventListener('input', () => {
+    if (!scrubbing) startScrub(); // keyboard arrows
+    const depth = Number(timeInput.value) / SLIDER_MAX;
+    clock.ma = depth >= 1 ? clock.endMa : maAtDepth(depth);
+  });
 
   const syncPlay = () => {
     playBtn.classList.toggle('paused', !clock.playing);
@@ -50,6 +84,8 @@ export function createUI(clock, events = []) {
   let lastEvent = null;
   function update() {
     const ma = clock.ma;
+    if (!scrubbing) timeInput.value = String(Math.round(depthAt(ma) * SLIDER_MAX));
+    timeInput.setAttribute('aria-valuetext', `${formatMa(ma)} million years ago`);
     const text = formatMa(ma);
     if (text !== lastText) {
       maEl.textContent = text;
