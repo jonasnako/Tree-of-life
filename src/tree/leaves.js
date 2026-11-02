@@ -25,6 +25,9 @@ import { createRandom } from '../random.js';
 import { thicknessAt, smooth, GROWTH } from './growth.js';
 import { TREE_HEIGHT } from './layout.js';
 import { windUniforms, WIND_GLSL } from '../wind.js';
+import { STATUS, threatOf, sampleStatus } from './status.js';
+
+export { STATUS };
 
 /** Shared with main.js, which keeps the sun direction (view space) and the crown current. */
 export const leafLight = {
@@ -46,15 +49,6 @@ const SPRAY_REACH = 0.03; // depth behind a growing tip that carries sprays
 const COTYLEDON_HEIGHT = 0.32; // world units up the seedling stem
 
 const FRESH = new THREE.Color('#79c043');
-// IUCN Red List status -> leaf colour, healthy green to autumn red.
-export const STATUS = [
-  { code: 'LC', label: 'Least concern', color: '#4f9e2c' },
-  { code: 'NT', label: 'Near threatened', color: '#a3b52e' },
-  { code: 'VU', label: 'Vulnerable', color: '#e2b42a' },
-  { code: 'EN', label: 'Endangered', color: '#e07722' },
-  { code: 'CR', label: 'Critically endangered', color: '#c8301c' },
-  { code: 'DD', label: 'Data deficient', color: '#8f9c80' },
-];
 const STATUS_INDEX = Object.fromEntries(STATUS.map((s, i) => [s.code, i + 1]));
 const MATURE = new THREE.Color('#3f7d2a');
 const AUTUMN = new THREE.Color('#c9a23a');
@@ -106,6 +100,7 @@ export function createLeaves(branches, branchTex) {
       // count (1,000 species ~0.7, a million ~2.2 world units); the number of
       // cards grows with its surface.
       rand = createRandom(`${br.node.id}-foliage`);
+      const threat = threatOf(br.node);
       const R = 0.22 * Math.pow(species, 1 / 6) * ls;
       const cards = Math.round(THREE.MathUtils.clamp(12 * (R / 0.7) ** 2, 2, 160));
       for (let k = 0; k < cards; k++) {
@@ -116,7 +111,8 @@ export function createLeaves(branches, branchTex) {
           z = rand.range(-1, 1);
         } while (x * x + y * y + z * z > 1);
         const cluster = [x * R * 0.8 + R * 0.35, y * R, z * R];
-        sprayInst.push([br, 1, 0, 0, rand.range(0.3, 1.0), rand.range(0.4, 0.62) * ls, rand.range(-0.06, 0.05), cluster, rand()]);
+        // Cards take on the clade's share of threatened species too.
+        sprayInst.push([br, 1, 0, 0, rand.range(0.3, 1.0), rand.range(0.4, 0.62) * ls, rand.range(-0.06, 0.05), cluster, rand(), sampleStatus(threat, rand)]);
       }
     }
   }
@@ -263,11 +259,11 @@ function gpuLeafMesh(base, inst, branchTex, material) {
   const aMode = new Float32Array(inst.length * 4);
   const aShape = new Float32Array(inst.length * 4);
   const aCluster = new Float32Array(inst.length * 3);
-  inst.forEach(([br, mode, value, angle, tilt, size, hue, cluster], k) => {
+  inst.forEach(([br, mode, value, angle, tilt, size, hue, cluster, , status], k) => {
     if (cluster) aCluster.set(cluster, k * 3);
     const living = !br.node.children.length && !br.node.endMa ? 1 : 0;
     aBranch.set([branchTex.start.get(br), br.points.length, br.depths[0], br.depths.at(-1)], k * 4);
-    aMode.set([mode, value, living, 0], k * 4);
+    aMode.set([mode, value, living, status ?? 0], k * 4);
     aShape.set([angle, tilt, size, hue], k * 4);
   });
   geometry.setAttribute('aBranch', new THREE.InstancedBufferAttribute(aBranch, 4));
@@ -339,6 +335,8 @@ void computeLeaf(out vec3 outPos, out vec3 outNormal) {
     scale = 0.25 + 0.75 * open;
     #ifdef SPRAY_LEAVES
       vLeafColor = mix(${glslColor(MATURE)}, ${glslColor(FRESH)}, clamp(0.35 + aShape.w * 3.0, 0.0, 1.0)) * (1.0 + aShape.w);
+      float sc = aMode.w;
+      if (sc > 0.5) vLeafColor = ${STATUS_GLSL} * (1.0 + aShape.w);
     #else
       vLeafColor = ${glslColor(FRESH)} * (1.0 + aShape.w);
       // Conservation status (aCluster.x: 0 none, 1..6 = STATUS order).

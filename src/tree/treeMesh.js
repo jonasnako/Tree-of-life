@@ -40,7 +40,8 @@ export function createTreeMesh(branches) {
 
   const geometry = buildGeometry(branches);
 
-  const material = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0 });
+  // Double-sided as a backstop: any opening shows dark heartwood, not sky.
+  const material = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader =
@@ -228,6 +229,7 @@ bark = mix(bark, uMoss * (0.8 + 0.4 * grain), moss * 0.85);
 // Shade the grooves between the twisted ridges.
 bark *= 1.0 - 0.55 * vGroove * old;
 diffuseColor.rgb *= mix(young, bark, barkMix) * vWoodAO;
+if (!gl_FrontFacing) diffuseColor.rgb *= 0.3; // inside of the wood
 barkH *= barkMix;
 `;
 
@@ -250,13 +252,19 @@ const ROUGHNESS_FRAGMENT = /* glsl */ `
 float roughnessFactor = mix(0.5, roughness, smoothstep(0.0, uBark1, vAge));
 `;
 
+// Every branch ends in a rounded cap (a few shrinking rings past its last
+// point), so a fork that turns sharply never shows the hollow inside.
+const CAP_ALONG = [0.3, 0.6, 0.85];
+const CAP_RADIUS = [0.95, 0.78, 0.42];
+
 function buildGeometry(branches) {
   let vertexCount = 0;
   let indexCount = 0;
   for (const br of branches) {
     br.radial = radialSegments(Math.max(...br.radii));
-    vertexCount += br.points.length * (br.radial + 1);
-    indexCount += (br.points.length - 1) * br.radial * 6;
+    const rings = br.points.length + CAP_ALONG.length;
+    vertexCount += rings * (br.radial + 1);
+    indexCount += (rings - 1) * br.radial * 6;
   }
   const position = new Float32Array(vertexCount * 3);
   const normal = new Float32Array(vertexCount * 3);
@@ -280,13 +288,20 @@ function buildGeometry(branches) {
     const maxR = Math.max(...br.radii);
     const uRepeat = Math.max(1, Math.round(maxR * 5));
     const burls = makeBurls(br, maxR);
-    for (let i = 0; i < br.points.length; i++) {
-      const p = br.points[i];
+    const last = br.points.length - 1;
+    const rings = br.points.length + CAP_ALONG.length;
+    const capP = new THREE.Vector3();
+    for (let r = 0; r < rings; r++) {
+      const cap = r - last; // 1.. for the cap rings
+      const i = Math.min(r, last);
       const n = br.normals[i];
       const b = br.binormals[i];
       const t = br.tangents[i];
-      const dist = br.dists[i];
-      const path = br.paths[i];
+      const along = cap > 0 ? br.radii[last] * CAP_ALONG[cap - 1] : 0;
+      const p = cap > 0 ? capP.copy(br.points[last]).addScaledVector(t, along) : br.points[i];
+      const shrink = cap > 0 ? CAP_RADIUS[cap - 1] : 1;
+      const dist = br.dists[i] + along;
+      const path = br.paths[i] + along;
       for (let j = 0; j <= m; j++) {
         const a = (j / m) * Math.PI * 2;
         const c = Math.cos(a);
@@ -311,7 +326,7 @@ function buildGeometry(branches) {
         uv[v * 2] = (j / m) * uRepeat + path * 0.12;
         uv[v * 2 + 1] = path / 1.6;
         aDepth[v] = br.depths[i];
-        aRadius[v] = br.radii[i] * fin;
+        aRadius[v] = br.radii[i] * fin * shrink;
         aAngle[v] = a;
         aPath[v] = path;
         aBarkR[v] = br.barkRadii[i];
@@ -320,7 +335,7 @@ function buildGeometry(branches) {
         v++;
       }
     }
-    for (let i = 0; i < br.points.length - 1; i++) {
+    for (let i = 0; i < rings - 1; i++) {
       for (let j = 0; j < m; j++) {
         const a = base + i * (m + 1) + j;
         const b = a + m + 1;

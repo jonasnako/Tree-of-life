@@ -17,6 +17,7 @@ import { thicknessAt } from './tree/growth.js';
 import { createLeaves, leafLight, STATUS } from './tree/leaves.js';
 import { createBranchTexture } from './tree/branchTexture.js';
 import { createLeafFall } from './tree/leafFall.js';
+import { createFoliageDust } from './tree/foliageDust.js';
 import { windUniforms, windSway } from './wind.js';
 
 const RUN_SECONDS = 60; // seed to today at 1×
@@ -32,9 +33,11 @@ const tree = loadTree();
 setOrigin(tree.originMa);
 addPlaceholderForks(tree);
 let mode = location.hash === '#natural' ? 'natural' : 'fractal'; // fractal is the default
-let branches, treeMesh, branchTex, leaves, leafFall;
+let branches, treeMesh, branchTex, leaves, leafFall, dust;
+// Tiny-leaf budget: fewer on small screens (phones).
+const DUST_BUDGET = Math.min(window.innerWidth, window.innerHeight) < 600 ? 25000 : 60000;
 function build() {
-  for (const part of [treeMesh?.mesh, leaves?.group, leafFall?.group]) {
+  for (const part of [treeMesh?.mesh, leaves?.group, leafFall?.group, dust?.mesh]) {
     if (!part) continue;
     scene.remove(part);
     part.traverse((o) => {
@@ -48,7 +51,8 @@ function build() {
   branchTex = createBranchTexture(branches);
   leaves = createLeaves(branches, branchTex);
   leafFall = createLeafFall(branches);
-  scene.add(treeMesh.mesh, leaves.group, leafFall.group);
+  dust = createFoliageDust(branches, branchTex, { budget: DUST_BUDGET });
+  scene.add(treeMesh.mesh, leaves.group, leafFall.group, dust.mesh);
 }
 build();
 
@@ -151,7 +155,7 @@ document.getElementById('restart').addEventListener('click', releaseCamera);
 
 // Legend for leaf colours.
 document.getElementById('legend').innerHTML =
-  '<span class="legend-title">Leaf colour · IUCN Red List</span>' +
+  '<span class="legend-title">Leaf colour · IUCN Red List · big groups estimated</span>' +
   STATUS.map((st) => `<span class="legend-item" title="${st.label}"><i style="background:${st.color}"></i>${st.code}</span>`).join('');
 
 // Shape mode: natural (time sets branch length) or fractal (species do).
@@ -243,7 +247,10 @@ function frame(time) {
   leafLight.uSunView.value.copy(sunDir).transformDirection(camera.matrixWorldInverse);
   leafLight.uCrown.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
   // Level of detail: from far away, fewer (larger) foliage cards.
-  leaves.setDetail(((sphere.radius * 1.6) / Math.max(dist, 0.1)) ** 2);
+  const detail = ((sphere.radius * 1.6) / Math.max(dist, 0.1)) ** 2;
+  leaves.setDetail(detail);
+  dust.setDetail(detail);
+  dust.update(now, renderer, camera);
   // Clear the view to the followed leaf when the camera is close to it.
   if (clock.ma <= tree.focus.splitMa) {
     leafCentre(tree.focus.branch, now, revealAt);

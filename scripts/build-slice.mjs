@@ -41,6 +41,27 @@ const ANCHORS = {
   ott93302: { date: 4200, source: 'Moody et al. 2024, Nature Ecology & Evolution: LUCA about 4.2 billion years ago' },
 };
 
+// Approximate share of species threatened (IUCN categories VU + EN + CR)
+// for groups too big to list species by species. A group takes the value of
+// its nearest ancestor in this table. These are rounded published figures,
+// meant to show the scale of the losses, not exact counts.
+const THREAT_SHARES = {
+  Metazoa: { share: 0.125, source: 'IPBES 2019: about 1 million of ~8 million species threatened' },
+  Fungi: { share: 0.1, source: 'assumed, few fungi assessed' },
+  Embryophyta: { share: 0.39, source: 'Nic Lughadha et al. 2020: ~39% of vascular plants threatened' },
+  Pinopsida: { share: 0.34, source: 'IUCN Red List: ~34% of conifers' },
+  Cycadopsida: { share: 0.69, source: 'IUCN Red List: ~69% of cycads' },
+  Cnidaria: { share: 0.33, source: 'IUCN Red List: ~33-44% of reef-building corals' },
+  Mollusca: { share: 0.25, source: 'IUCN Red List: roughly a quarter of assessed molluscs' },
+  Actinopterygii: { share: 0.12, source: 'IUCN Red List: ~1 in 8 assessed ray-finned fishes' },
+  Chondrichthyes: { share: 0.37, source: 'Dulvy et al. 2021: ~37% of sharks, rays and chimaeras' },
+  Amphibia: { share: 0.41, source: 'Luedtke et al. 2023 (Global Amphibian Assessment 2): ~41%' },
+  Sauropsida: { share: 0.17, source: 'IUCN Red List: reptiles ~21%, birds ~12%' },
+  Aves: { share: 0.12, source: 'BirdLife/IUCN: ~1 in 8 bird species' },
+  Mammalia: { share: 0.26, source: 'IUCN Red List: ~26% of mammals' },
+  Primates: { share: 0.6, source: 'Estrada et al. 2017: ~60% of primate species threatened' },
+};
+
 // Placeholder taxa in the source tree that are not real clades.
 const JUNK = /environmental|uncultured|unclassified|incertae sedis|unidentified/i;
 const ORIGIN_MIN = 4000; // the seed is planted at least this long ago (Ma)
@@ -483,6 +504,21 @@ async function main() {
   }
   console.log(`  ${small.reduce((s, o) => s + o.leaves.length, 0)} species leaves, ${rated} with an IUCN status.`);
 
+  // Threat shares for the rest: nearest ancestor (including the original,
+  // collapsed path nodes) found in THREAT_SHARES. Bacteria and archaea have
+  // no Red List, so they get none.
+  const chainNames = (id) => {
+    const names = [];
+    for (let n = nodes.get(id); n; n = n.parent ? nodes.get(n.parent) : null) if (n.taxon?.name) names.push(n.taxon.name);
+    return names;
+  };
+  for (const o of out) {
+    if (o.leaves) continue;
+    const names = [o.name, ...chainNames(nodes.has(o.id) ? o.id : o.parent)];
+    const hit = names.find((nm) => THREAT_SHARES[nm]);
+    if (hit) o.threat = THREAT_SHARES[hit].share;
+  }
+
   console.log('Fetching common names for clades…');
   const named = out.filter((o) => !o.common && !o.grouped && /^[A-Z][a-z]+$/.test(o.name));
   const commons = await cladeCommonNames([...new Set(named.map((o) => o.name))]);
@@ -491,12 +527,13 @@ async function main() {
 
   const file = {
     about:
-      'Real-data slice (build step 4): the path from the root to each showcase species, with every living sister clade collapsed to one node. Structure and species counts (tips in the synthetic tree) from the Open Tree of Life; fork dates from TimeTree pairwise divergence times, a published anchor for the root, and interpolation where neither has an estimate (dateSource on each inner node says which). splitMa is when a node split from its sister. Tips of ten or fewer species list their species (leaves) with IUCN conservation status and common names from Wikidata. Fossil-only lineages are left out for now.',
+      'Real-data slice (build step 4): the path from the root to each showcase species, with every living sister clade collapsed to one node. Structure and species counts (tips in the synthetic tree) from the Open Tree of Life; fork dates from TimeTree pairwise divergence times, a published anchor for the root, and interpolation where neither has an estimate (dateSource on each inner node says which). splitMa is when a node split from its sister. Tips of ten or fewer species list their species (leaves) with IUCN conservation status and common names from Wikidata; bigger groups carry an approximate share of threatened species (threat) from published Red List summaries. Fossil-only lineages are left out for now.',
     sources: {
       openTree: 'https://tree.opentreeoflife.org (synthetic tree, v3 API)',
       timeTree: 'https://timetree.org (pairwise divergence times)',
       wikidata: 'https://www.wikidata.org (IUCN conservation status P141, common names P1843)',
       anchors: Object.values(ANCHORS).map((a) => a.source),
+      threatShares: Object.fromEntries(Object.entries(THREAT_SHARES).map(([k, v]) => [k, `${Math.round(v.share * 100)}% (${v.source})`])),
     },
     built: new Date().toISOString().slice(0, 10),
     originMa: origin,

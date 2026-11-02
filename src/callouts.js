@@ -4,7 +4,9 @@
 // from the crown. Click a label to fly to what it points at.
 import * as THREE from 'three';
 
-const OFFSET = 96; // px from the anchor to the label
+// Directions tried around the outward one (radians), nearest first.
+const TURNS = [0, 0.5, -0.5, 1, -1, 1.6, -1.6, 2.3, -2.3, Math.PI];
+const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 const MARGIN = 16;
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -47,11 +49,16 @@ export function createCallouts({ onPick } = {}) {
   function update(list, camera, center) {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    const bottomLimit = h - (document.querySelector('.controls')?.offsetHeight ?? 110) - 32;
     c.copy(center).project(camera);
     const cx = (c.x * 0.5 + 0.5) * w;
     const cy = (-c.y * 0.5 + 0.5) * h;
-    const bar = document.querySelector('.topbar')?.getBoundingClientRect();
+    // Everything on screen that labels must not cover.
+    const blockers = ['.controls', '.topbar', '.hud']
+      .map((q) => document.querySelector(q)?.getBoundingClientRect())
+      .filter((r) => r && r.width)
+      .map((r) => ({ x: r.left - 6, y: r.top - 6, w: r.width + 12, h: r.height + 12 }));
+    const small = Math.min(w, h) < 600;
+    const reach = small ? [52, 80, 110] : [70, 105, 145];
     const placed = [];
     const seen = new Set();
 
@@ -66,29 +73,40 @@ export function createCallouts({ onPick } = {}) {
       if (item.title !== callout.title) item.el.firstChild.textContent = item.title = callout.title;
       if (item.sub !== (callout.sub ?? '')) item.el.lastChild.textContent = item.sub = callout.sub ?? '';
 
-      // Outward from the tree's centre, leaning upward.
-      let dx = ax - cx;
-      let dy = ay - cy - 40;
-      const len = Math.hypot(dx, dy) || 1;
-      dx /= len;
-      dy /= len;
-      const right = dx >= 0;
+      // Try spots around the anchor, starting outward from the tree's centre,
+      // close in first. A spot must stay on screen and clear of the controls
+      // and of labels already placed. With no free spot nearby the label is
+      // dropped (its dot stays) rather than drawn far away on a long line.
       const lw = item.el.offsetWidth;
       const lh = item.el.offsetHeight;
-      const bx = ax + dx * OFFSET * 0.6; // where the leader bends
-      let ly = ay + dy * OFFSET - lh;
-      let left = right ? bx + 10 : bx - 10 - lw;
-      left = Math.min(Math.max(left, MARGIN), w - lw - MARGIN);
-      ly = Math.min(Math.max(ly, MARGIN), bottomLimit - lh);
-      // Keep clear of the counter in the top-left corner.
-      if (left < 250 && ly < 150) ly = 150;
-      // ...and below the mode and species controls at the top right.
-      if (bar && left + lw > bar.left - 8 && ly < bar.bottom + 8) ly = bar.bottom + 8;
-      for (let tries = 0; tries < 6; tries++) {
-        const hit = placed.find((r) => left < r.x + r.w + 8 && left + lw + 8 > r.x && ly < r.y + r.h + 2 && ly + lh + 2 > r.y);
-        if (!hit) break;
-        ly = hit.y + hit.h + 4;
+      const base = Math.atan2(ay - cy - 40, ax - cx);
+      let spot = null;
+      for (const dist of reach) {
+        for (const turn of TURNS) {
+          const ang = base + turn;
+          const dx = Math.cos(ang);
+          const dy = Math.sin(ang);
+          const right = dx >= 0;
+          const bx = ax + dx * dist * 0.6;
+          const ly = ay + dy * dist - lh;
+          const left = right ? bx + 10 : bx - 10 - lw;
+          const r = { x: left, y: ly, w: lw, h: lh + 2 };
+          if (left < MARGIN || left + lw > w - MARGIN || ly < MARGIN || ly + lh > h - MARGIN) continue;
+          if ([...blockers, ...placed].some((b) => overlaps(r, b))) continue;
+          spot = { left, ly, right };
+          break;
+        }
+        if (spot) break;
       }
+      item.el.style.visibility = spot ? '' : 'hidden'; // keeps its size for next frame's fit
+      if (!spot) {
+        item.halo.style.opacity = item.line.style.opacity = 0;
+        item.dot.setAttribute('cx', ax.toFixed(1));
+        item.dot.setAttribute('cy', ay.toFixed(1));
+        item.dot.style.opacity = (callout.alpha ?? 1) * 0.8;
+        continue;
+      }
+      const { left, ly, right } = spot;
       placed.push({ x: left, y: ly, w: lw, h: lh });
 
       const alpha = callout.alpha ?? 1;
