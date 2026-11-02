@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { createRandom } from '../random.js';
 import { depthAt, maAtDepth } from '../timeScale.js';
+import { groundY } from '../scene.js';
 
 export const TREE_HEIGHT = 16; // world units from seed to today along any path
 const STEP = 0.11; // centreline sample spacing (world units)
@@ -196,7 +197,7 @@ function addRoots(branches, rootSpecies) {
     br.radii = br.dists.map((d) => r0 * (0.12 + 0.88 * Math.exp(-d / (length * 0.45))));
     br.points.forEach((p, i) => {
       const d = br.dists[i];
-      p.y = Math.max(-br.radii[i] * 0.45, 0.6 * Math.exp(-d * 1.1) - br.radii[i] * 0.45);
+      p.y = groundY(p.x, p.z) + Math.max(-br.radii[i] * 0.45, 0.6 * Math.exp(-d * 1.1) - br.radii[i] * 0.45);
     });
     br.barkRadii = br.radii.map(() => trunkR);
     br.node = node;

@@ -13,7 +13,7 @@
 //                   one leaf per species (a one-species tip ends in exactly
 //                   one leaf), up to TUFT_MAX. Where the data lists the
 //                   species, each leaf is coloured by its IUCN status (step 6)
-//                   and fossil species grow no leaf.
+//                   and fossil species keep a dry, dead leaf.
 //   foliage       - for rich clades alive today: a cloud of leafy cards around
 //                   the tip whose size grows with the species count (step 5),
 //                   filling in slowly as the clade ages. Cards are shuffled,
@@ -25,7 +25,7 @@ import { createRandom } from '../random.js';
 import { thicknessAt, smooth, GROWTH } from './growth.js';
 import { TREE_HEIGHT } from './layout.js';
 import { windUniforms, WIND_GLSL } from '../wind.js';
-import { STATUS, threatOf, sampleStatus } from './status.js';
+import { STATUS, threatOf, sampleStatus, DRY } from './status.js';
 
 export { STATUS };
 
@@ -84,14 +84,21 @@ export function createLeaves(branches, branchTex) {
     const status = (l) => [STATUS_INDEX[l?.status] ?? 0, 0, 0];
     if (species === 1 || listed?.length === 1) {
       // A single species: one leaf, right at the tip.
-      if (!listed?.[0]?.extinct) leafInst.push([br, 1, 0.0003, 0, 0.12, 0.26 * ls, 0.02, status(listed?.[0])]);
+      const l = listed?.[0];
+      // A fossil species keeps a dry, dead leaf, hanging down.
+      if (l?.extinct) leafInst.push([br, 1, 0.0003, 0, 1.9, 0.22 * ls, 0, [DRY, 0, 0]]);
+      else leafInst.push([br, 1, 0.0003, 0, 0.12, 0.26 * ls, 0.02, status(l)]);
     } else {
       const tips = listed ? listed.length : Math.min(species, TUFT_MAX);
       for (let k = 0; k < tips; k++) {
         const angle = k * 2.39996 + rand.range(-0.3, 0.3);
         const tilt = rand.range(0.35, 0.8);
         const size = rand.range(0.16, 0.24) * ls;
-        if (listed?.[k]?.extinct) continue; // a fossil species: its place stays bare
+        if (listed?.[k]?.extinct) {
+          // A fossil species: a dry, dead leaf hanging on the twig.
+          leafInst.push([br, 1, (k / tips) * 0.006 + 0.0006, angle, 1.9, size * 0.9, 0, [DRY, 0, 0]]);
+          continue;
+        }
         leafInst.push([br, 1, (k / tips) * 0.006 + 0.0006, angle, tilt, size, rand.range(-0.03, 0.03), status(listed?.[k])]);
       }
     }
@@ -112,7 +119,7 @@ export function createLeaves(branches, branchTex) {
         } while (x * x + y * y + z * z > 1);
         const cluster = [x * R * 0.8 + R * 0.35, y * R, z * R];
         // Cards take on the clade's share of threatened species too.
-        sprayInst.push([br, 1, 0, 0, rand.range(0.3, 1.0), rand.range(0.4, 0.62) * ls, rand.range(-0.06, 0.05), cluster, rand(), sampleStatus(threat, rand)]);
+        sprayInst.push([br, 1, 0, 0, rand.range(0.3, 1.0), rand.range(0.4, 0.62) * ls, rand.range(-0.06, 0.05), cluster, rand(), sampleStatus(threat, rand, 0.03)]);
       }
     }
   }

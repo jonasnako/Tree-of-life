@@ -8,7 +8,9 @@ export const STATUS = [
   { code: 'EN', label: 'Endangered', color: '#e07722' },
   { code: 'CR', label: 'Critically endangered', color: '#c8301c' },
   { code: 'DD', label: 'Data deficient', color: '#8f9c80' },
+  { code: 'EX', label: 'Extinct (dry leaf)', color: '#7b5a38' },
 ];
+export const DRY = 7; // index of the dry, dead leaf
 
 /** Nearest approximate threat share up the tree (placeholder forks inherit). */
 export function threatOf(node) {
@@ -20,7 +22,9 @@ export function threatOf(node) {
  * Sample a status index (STATUS order, 1-based; 0 = healthy, natural green)
  * from a clade's share of threatened species.
  */
-export function sampleStatus(threat, rand) {
+export function sampleStatus(threat, rand, dryShare = 0) {
+  // A few dry, dead leaves stay on the tree, as in nature.
+  if (dryShare && rand() < dryShare) return DRY;
   if (threat == null) return 0;
   const u = rand();
   if (u < threat) {

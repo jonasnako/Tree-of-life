@@ -24,13 +24,17 @@ Open the address it prints (usually http://localhost:5173). `npm run dev` also p
 
 `npm run build` writes a static site to `dist/` (relative paths, ready for GitHub Pages or Netlify).
 
+## Environment
+
+The tree grows on top of a small planet (the horizon bends as you pull back), and the world around it follows Earth's climate through deep time (`src/climate.js`): the orange-hazed, still volcanic young Earth, the Huronian and Snowball Earth glaciations, the warm “boring billion”, the Ordovician and Late Paleozoic ice ages, the end-Permian hothouse desert, the Mesozoic greenhouse, the PETM heat spike, cooling after 34 Ma, the Pleistocene ice ages and the Holocene. Sky, haze, sunlight, fog and the ground (bare rock, sand, moss and grass once plants reach land around 470 Ma, snow) change with it, snow settles on the tops of branches in ice ages, and the episode is named under the eon. These are broad strokes, not a temperature record.
+
 ## Data
 
 `public/data/tree-slice.json` is built by `node scripts/build-slice.mjs` (Node 18+, network on first run; responses are cached in `raw/cache`, which is not committed).
 
 - **Structure and species counts:** [Open Tree of Life](https://tree.opentreeoflife.org) synthetic tree (v3 API). The path from the root to each showcase species, and every living sister clade along it collapsed to one node with its real number of tips. At each fork the 3 biggest sister clades are kept and smaller ones grouped.
 - **Dates:** [TimeTree](https://timetree.org) pairwise divergence times between a showcase species and a member of the clade on the other side of each fork. The root (no TimeTree estimate across domains) uses Moody et al. 2024 (LUCA about 4.2 billion years ago), so the seed is planted at 4,350 Ma. Forks without an estimate are interpolated; `dateSource` on each node says which.
-- **Species and conservation status (step 6):** tips of ten or fewer species list their species (subspecies and strains merged), each drawn as one leaf coloured by its IUCN Red List status from [Wikidata](https://www.wikidata.org) (P141, matched by scientific name): green (least concern) through yellow, orange to autumn red (critically endangered), grey-green for data deficient, plain green where not assessed. Big groups (foliage masses) carry an approximate share of threatened species from published Red List summaries (e.g. amphibians ~41%, primates ~60%, vascular plants ~39%, animals in general ~1 in 8 per IPBES 2019; the table and sources are in the script and the data file), and their leaves are coloured in those proportions. Fossil species grow no leaf. Common names come from Wikidata too (P1843, else the English label).
+- **Species and conservation status (step 6):** tips of ten or fewer species list their species (subspecies and strains merged), each drawn as one leaf coloured by its IUCN Red List status from [Wikidata](https://www.wikidata.org) (P141, matched by scientific name): green (least concern) through yellow, orange to autumn red (critically endangered), grey-green for data deficient, plain green where not assessed. Big groups (foliage masses) carry an approximate share of threatened species from published Red List summaries (e.g. amphibians ~41%, primates ~60%, vascular plants ~39%, animals in general ~1 in 8 per IPBES 2019; the table and sources are in the script and the data file), and their leaves are coloured in those proportions. Fossil species keep a dry, dead leaf hanging on the twig, and a few dry leaves stay in the crown, as on real trees. Common names come from Wikidata too (P1843, else the English label).
 - Fossil-only lineages are left out for now (step 8). A few unflagged fossil genera remain as living twigs.
 
 ## How it stays fast

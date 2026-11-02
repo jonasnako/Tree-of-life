@@ -2,6 +2,7 @@
 // down, turning in the air. On the ground a litter of fallen leaves builds
 // up under the crown over the ages, then slowly rots back into the soil.
 import * as THREE from 'three';
+import { groundY } from '../scene.js';
 import { createRandom } from '../random.js';
 
 const FALLING = 600; // leaves in the air at most
@@ -104,7 +105,8 @@ export function createLeafFall(branches) {
     for (let i = 0; i < FALLING; i++) {
       const p = pool[i];
       if (!p.active) continue;
-      if (p.pos.y > 0.02) {
+      const floor = groundY(p.pos.x, p.pos.z) + 0.02;
+      if (p.pos.y > floor) {
         // Flutter: side-to-side drift and tumbling on the way down.
         p.pos.addScaledVector(p.vel, dt);
         p.pos.x += Math.sin(t * 2.2 + p.phase) * 0.5 * dt;
@@ -112,7 +114,7 @@ export function createLeafFall(branches) {
         p.q.multiply(dq.setFromAxisAngle(p.spinAxis, p.spin * dt));
       } else {
         // Lie flat for a moment, then fade into the litter.
-        p.pos.y = 0.02;
+        p.pos.y = floor;
         p.rest += dt;
         p.q.slerp(dq.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2), Math.min(1, dt * 6));
         if (p.rest > 4) {
@@ -163,7 +165,8 @@ function placeLitter(litter, branches) {
     const spread = 0.35 + 0.18 * Math.max(0, p.y);
     const gx = (rand() + rand() + rand() - 1.5) * spread * 1.4;
     const gz = (rand() + rand() + rand() - 1.5) * spread * 1.4;
-    pos.set(p.x + gx, 0.012 + rand() * 0.012, p.z + gz);
+    pos.set(p.x + gx, 0, p.z + gz);
+    pos.y = groundY(pos.x, pos.z) + 0.012 + rand() * 0.012;
     q.setFromAxisAngle(up, rand() * Math.PI * 2);
     const s = rand.range(0.16, 0.24);
     m4.compose(pos, q, scl.set(s, s, s));

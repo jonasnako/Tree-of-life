@@ -55,6 +55,14 @@ html, body {
   color: var(--accent);
 }
 
+.counter-climate {
+  margin-top: 1px;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+}
+
 .legend {
   display: flex;
   flex-wrap: wrap;

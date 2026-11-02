@@ -46,7 +46,7 @@ export function createFoliageDust(branches, branchTex, { budget = 60000 } = {}) 
         off: [x * R * 0.8 + R * 0.35, y * R, z * R],
         size: rand.range(0.06, 0.11) * Math.max(0.5, ls),
         angle: rand.range(0, Math.PI * 2),
-        status: sampleStatus(threat, rand),
+        status: sampleStatus(threat, rand, 0.04),
         shade: rand.range(0.75, 1.15),
         rank: rand(),
       });

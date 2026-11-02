@@ -7,7 +7,8 @@ import * as THREE from 'three';
 import { loadTree, setFocus, TIME_END_MA } from './data.js';
 import { GrowthClock } from './clock.js';
 import { depthAt, depthPerMa, setOrigin } from './timeScale.js';
-import { createScene, handleResize } from './scene.js';
+import { createScene, handleResize, applyClimate } from './scene.js';
+import { climateAt } from './climate.js';
 import { createCamera } from './camera.js';
 import { createUI, formatMa } from './ui.js';
 import { createCallouts } from './callouts.js';
@@ -23,7 +24,8 @@ import { windUniforms, windSway } from './wind.js';
 const RUN_SECONDS = 60; // seed to today at 1×
 
 const canvas = document.getElementById('scene');
-const { renderer, scene, sun, sky } = createScene(canvas);
+const world = createScene(canvas);
+const { renderer, scene, sun, sky } = world;
 const { camera, controls, update: updateCamera, flyTo, release: releaseCamera } = createCamera(canvas);
 handleResize(renderer, camera);
 
@@ -156,7 +158,7 @@ document.getElementById('restart').addEventListener('click', releaseCamera);
 // Legend for leaf colours.
 document.getElementById('legend').innerHTML =
   '<span class="legend-title">Leaf colour · IUCN Red List · big groups estimated</span>' +
-  STATUS.map((st) => `<span class="legend-item" title="${st.label}"><i style="background:${st.color}"></i>${st.code}</span>`).join('');
+  STATUS.map((st) => `<span class="legend-item" title="${st.label}"><i style="background:${st.color}"></i>${st.code === 'EX' ? 'Fossil' : st.code}</span>`).join('');
 
 // Shape mode: natural (time sets branch length) or fractal (species do).
 const modeButtons = document.querySelectorAll('[data-mode]');
@@ -221,6 +223,9 @@ function fitShadows() {
   sun.position.copy(sphere.center).addScaledVector(sunDir, r * 2 + 20);
 }
 
+const climateEl = document.getElementById('climate');
+let climateName = '';
+const upView = new THREE.Vector3();
 let lastTime = null;
 function frame(time) {
   // Clamp so a background tab or a slow frame never jumps (or reverses) time.
@@ -234,6 +239,12 @@ function frame(time) {
   leafFall.update(dt, now, leaves.dying);
 
   windUniforms.uTime.value = time / 1000;
+  world.env.uTime.value = time / 1000;
+
+  // Climate of the time: sky, light, ground, snow on the branches.
+  const climate = climateAt(clock.ma);
+  applyClimate(world, climate);
+  if (climate.name !== climateName) climateEl.textContent = climateName = climate.name;
 
   frameTree(now);
   fitShadows();
@@ -245,6 +256,7 @@ function frame(time) {
   sky.position.copy(camera.position);
   camera.updateMatrixWorld();
   leafLight.uSunView.value.copy(sunDir).transformDirection(camera.matrixWorldInverse);
+  treeMesh.setSnow(THREE.MathUtils.smoothstep(-climate.temp, 0.1, 0.7), upView.set(0, 1, 0).transformDirection(camera.matrixWorldInverse));
   leafLight.uCrown.value.set(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
   // Level of detail: from far away, fewer (larger) foliage cards.
   const detail = ((sphere.radius * 1.6) / Math.max(dist, 0.1)) ** 2;

@@ -35,6 +35,8 @@ export function createTreeMesh(branches) {
     uBarkPlate: { value: new THREE.Color('#7a6f60') },
     uLichen: { value: new THREE.Color('#9fa98a') },
     uCrown: leafLight.uCrown,
+    uSnow: { value: 0 },
+    uUpView: { value: new THREE.Vector3(0, 1, 0) },
     ...windUniforms,
   };
 
@@ -72,6 +74,11 @@ export function createTreeMesh(branches) {
     mesh,
     setDepth(depth) {
       uniforms.uNow.value = depth;
+    },
+    /** Snow cover 0..1 and the world's up direction in view space. */
+    setSnow(amount, upView) {
+      uniforms.uSnow.value = amount;
+      uniforms.uUpView.value.copy(upView);
     },
   };
 }
@@ -165,6 +172,8 @@ varying float vWoodAO;
 uniform vec3 uBarkDark;
 uniform vec3 uBarkPlate;
 uniform vec3 uLichen;
+uniform float uSnow;
+uniform vec3 uUpView;
 float barkH;
 
 vec3 hash33(vec3 p) {
@@ -229,6 +238,9 @@ bark = mix(bark, uMoss * (0.8 + 0.4 * grain), moss * 0.85);
 // Shade the grooves between the twisted ridges.
 bark *= 1.0 - 0.55 * vGroove * old;
 diffuseColor.rgb *= mix(young, bark, barkMix) * vWoodAO;
+// Snow settles on the tops of branches in the ice ages.
+float snowTop = smoothstep(0.35, 0.8, dot(normalize(vNormal), uUpView)) * uSnow * smoothstep(0.02, 0.1, vAge);
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.95, 0.98), snowTop);
 if (!gl_FrontFacing) diffuseColor.rgb *= 0.3; // inside of the wood
 barkH *= barkMix;
 `;
