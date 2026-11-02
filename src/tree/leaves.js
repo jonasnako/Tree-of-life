@@ -14,11 +14,7 @@
 //                   one leaf), up to TUFT_MAX. Where the data lists the
 //                   species, each leaf is coloured by its IUCN status (step 6)
 //                   and fossil species keep a dry, dead leaf.
-//   foliage       - for rich clades alive today: a cloud of leafy cards around
-//                   the tip whose size grows with the species count (step 5),
-//                   filling in slowly as the clade ages. Cards are shuffled,
-//                   so from far away drawing only the first part of them,
-//                   a little bigger, keeps the look at a fraction of the cost.
+//   (rich clades' foliage masses are drawn by foliageDust.js)
 //   seed leaves   - the seedling's two cotyledons (2 instances, CPU)
 import * as THREE from 'three';
 import { createRandom } from '../random.js';
@@ -53,6 +49,8 @@ const STATUS_INDEX = Object.fromEntries(STATUS.map((s, i) => [s.code, i + 1]));
 const MATURE = new THREE.Color('#3f7d2a');
 const AUTUMN = new THREE.Color('#c9a23a');
 const SEED_LEAF = new THREE.Color('#9acb5a');
+// Colours of leaves lost from the living crown: critically endangered, endangered, vulnerable.
+const LOST = ['CR', 'EN', 'VU'].map((c) => new THREE.Color(STATUS.find((st) => st.code === c).color));
 
 /**
  * @param {object[]} branches
@@ -102,26 +100,7 @@ export function createLeaves(branches, branchTex) {
         leafInst.push([br, 1, (k / tips) * 0.006 + 0.0006, angle, tilt, size, rand.range(-0.03, 0.03), status(listed?.[k])]);
       }
     }
-    if (living && species > TUFT_MAX) {
-      // A foliage mass: its radius grows with the sixth root of the species
-      // count (1,000 species ~0.7, a million ~2.2 world units); the number of
-      // cards grows with its surface.
-      rand = createRandom(`${br.node.id}-foliage`);
-      const threat = threatOf(br.node);
-      const R = 0.22 * Math.pow(species, 1 / 6) * ls;
-      const cards = Math.round(THREE.MathUtils.clamp(12 * (R / 0.7) ** 2, 2, 160));
-      for (let k = 0; k < cards; k++) {
-        let x, y, z;
-        do {
-          x = rand.range(-1, 1);
-          y = rand.range(-1, 1);
-          z = rand.range(-1, 1);
-        } while (x * x + y * y + z * z > 1);
-        const cluster = [x * R * 0.8 + R * 0.35, y * R, z * R];
-        // Cards take on the clade's share of threatened species too.
-        sprayInst.push([br, 1, 0, 0, rand.range(0.3, 1.0), rand.range(0.4, 0.62) * ls, rand.range(-0.06, 0.05), cluster, rand(), sampleStatus(threat, rand, 0.03)]);
-      }
-    }
+    // Rich clades' foliage is drawn as dense masses of small leaves (foliageDust.js).
   }
 
   // Shuffle the foliage cards so any leading part of the list is an even sample.
@@ -208,12 +187,19 @@ export function createLeaves(branches, branchTex) {
         }
       }
     }
-    // Now and then a leaf lets go from the living crown.
-    const drops = activeSprays * dt * 0.05;
+    // Now and then a leaf lets go from the living crown: a lost species, so it
+    // falls in the colours of the threatened, yellow to red.
+    const drops = activeSprays * dt * 0.012;
     for (let k = 0; k < drops || Math.random() < drops - k; k++) {
       const t = tips[Math.floor(Math.random() * tips.length)];
-      if (now > t.d0 && (now <= t.d1 || t.living)) dying.push(surfacePoint(t.br, Math.min(now, t.d1) - Math.random() * 0.02, Math.random() * 6.28, new THREE.Vector3()).add(new THREE.Vector3(0, 0.3, 0)));
-      if (k > 5) break;
+      if (now > t.d0 && (now <= t.d1 || t.living)) {
+        const at = surfacePoint(t.br, Math.min(now, t.d1) - Math.random() * 0.02, Math.random() * 6.28, new THREE.Vector3());
+        at.y += 0.15;
+        const u = Math.random();
+        at.color = LOST[u < 0.35 ? 0 : u < 0.75 ? 1 : 2];
+        dying.push(at);
+      }
+      if (k > 3) break;
     }
 
     // Seed leaves.

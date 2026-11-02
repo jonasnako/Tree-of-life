@@ -37,7 +37,7 @@ addPlaceholderForks(tree);
 let mode = location.hash === '#natural' ? 'natural' : 'fractal'; // fractal is the default
 let branches, treeMesh, branchTex, leaves, leafFall, dust;
 // Tiny-leaf budget: fewer on small screens (phones).
-const DUST_BUDGET = Math.min(window.innerWidth, window.innerHeight) < 600 ? 25000 : 60000;
+const DUST_BUDGET = Math.min(window.innerWidth, window.innerHeight) < 600 ? 45000 : 140000;
 function build() {
   for (const part of [treeMesh?.mesh, leaves?.group, leafFall?.group, dust?.mesh]) {
     if (!part) continue;
@@ -101,7 +101,8 @@ const leafY = new THREE.Vector3();
 const revealAt = new THREE.Vector3();
 function updateCallouts(now) {
   const list = [];
-  const past = ui.events.filter((e) => e.ma >= clock.ma).slice(-SHOWN_FORKS);
+  // At today only the followed species keeps its label.
+  const past = clock.finished ? [] : ui.events.filter((e) => e.ma >= clock.ma).slice(-SHOWN_FORKS);
   past.forEach((e, k) => {
     const br = e.sister.branch;
     const d0 = br.depths[0];
@@ -226,6 +227,7 @@ function fitShadows() {
 const climateEl = document.getElementById('climate');
 let climateName = '';
 const upView = new THREE.Vector3();
+const focusLeaf = new THREE.Vector3();
 let lastTime = null;
 function frame(time) {
   // Clamp so a background tab or a slow frame never jumps (or reverses) time.
@@ -248,7 +250,15 @@ function frame(time) {
 
   frameTree(now);
   fitShadows();
-  updateCamera(dt, { center: sphere.center, radius: sphere.radius, tip, finished: clock.finished });
+  if (clock.finished) leafCentre(tree.focus.branch, now, focusLeaf);
+  updateCamera(dt, {
+    center: sphere.center,
+    radius: sphere.radius,
+    tip,
+    finished: clock.finished,
+    leaf: focusLeaf,
+    leafDistance: 0.5 + 1.0 * (tree.focus.branch.leafScale ?? 1),
+  });
   const dist = camera.position.distanceTo(sphere.center);
   scene.fog.near = dist * 1.6 + 6;
   scene.fog.far = dist * 5 + 40;

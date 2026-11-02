@@ -1,8 +1,10 @@
 // The immensity of a big clade: a cloud of countless tiny leaves.
 //
-// Each living clade richer than ten species gets a cloud of tiny leaf points
-// around its tip, many more for richer clades (the share of the budget grows
-// with the square root of the species count). Every point is one GPU vertex
+// Each living clade richer than ten species gets a dense mass of small leaf
+// points hugging the last part of its twig (thicker toward the tip), so the
+// foliage grows from the wood rather than floating beside it. Richer clades
+// get many more (the share of the budget grows with the square root of the
+// species count). Every point is one GPU vertex
 // drawn as a little leaf shape, so tens of thousands cost almost nothing.
 // Points are coloured by conservation status, sampled from the clade's
 // approximate share of threatened species: the crown shows what we are losing.
@@ -31,20 +33,20 @@ export function createFoliageDust(branches, branchTex, { budget = 60000 } = {}) 
     const rand = createRandom(`${br.node.id}-dust`);
     const species = br.node.species;
     const ls = br.leafScale ?? 1;
-    const R = 0.22 * Math.pow(species, 1 / 6) * ls * 1.15;
-    const count = Math.max(30, Math.round((budget * weights[m]) / total));
+    // Thickness of the leafy sleeve around the twig.
+    const R = 0.12 * Math.pow(species, 1 / 6) * ls;
+    const count = Math.max(40, Math.round((budget * weights[m]) / total));
     const threat = threatOf(br.node);
     for (let k = 0; k < count; k++) {
-      let x, y, z;
-      do {
-        x = rand.range(-1, 1);
-        y = rand.range(-1, 1);
-        z = rand.range(-1, 1);
-      } while (x * x + y * y + z * z > 1);
+      // Where along the twig (0 = tip, 1 = back along it), and how far out:
+      // mostly near the surface of the sleeve, so it reads as a canopy.
+      const along = Math.pow(rand(), 1.4);
+      const ang = rand.range(0, Math.PI * 2);
+      const r = R * (0.35 + 0.65 * Math.pow(rand(), 0.5)) * (1 - 0.45 * along);
       points.push({
         br,
-        off: [x * R * 0.8 + R * 0.35, y * R, z * R],
-        size: rand.range(0.06, 0.11) * Math.max(0.5, ls),
+        off: [along, Math.cos(ang) * r, Math.sin(ang) * r],
+        size: rand.range(0.035, 0.065) * Math.max(0.6, ls),
         angle: rand.range(0, Math.PI * 2),
         status: sampleStatus(threat, rand, 0.04),
         shade: rand.range(0.75, 1.15),
@@ -104,16 +106,17 @@ export function createFoliageDust(branches, branchTex, { budget = 60000 } = {}) 
       void main() {
         float d0 = aBranch.z;
         float d1 = aBranch.w;
-        float depth = min(uNow, d1);
         float shown = step(d0, uNow);
         float open = smoothstep(0.0, 0.08, uNow - d0);
+        // Along the last part of the twig, behind its current tip.
+        float depth = max(d0, min(uNow, d1) - aOffset.x * (d1 - d0) * 0.7 * open);
         float f = clamp((depth - d0) / max(d1 - d0, 1e-6), 0.0, 1.0) * (aBranch.y - 1.0);
         float si = min(floor(f), aBranch.y - 2.0);
         vec3 P = mix(sampleTexel(aBranch.x + si, 0.0).xyz, sampleTexel(aBranch.x + si + 1.0, 0.0).xyz, f - si);
         vec3 T = normalize(sampleTexel(aBranch.x + si, 1.0).xyz);
         vec3 N = normalize(sampleTexel(aBranch.x + si, 2.0).xyz);
         vec3 B = cross(T, N);
-        P += (T * aOffset.x + N * aOffset.y + B * aOffset.z) * (0.3 + 0.7 * open);
+        P += (N * aOffset.y + B * aOffset.z) * (0.3 + 0.7 * open) + T * (0.25 * length(aOffset.yz));
         P += windSway(P, 0.02);
         vec4 mvPosition = modelViewMatrix * vec4(P, 1.0);
         gl_Position = projectionMatrix * mvPosition;

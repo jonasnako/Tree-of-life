@@ -5,10 +5,10 @@ import * as THREE from 'three';
 import { groundY } from '../scene.js';
 import { createRandom } from '../random.js';
 
-const FALLING = 600; // leaves in the air at most
-const LITTER = 16000; // fallen leaves on the ground
+const FALLING = 900; // leaves in the air at most
+const LITTER = 40000; // fallen leaves on the ground
 const LEAF_LIFE = 0.14; // keep in step with leaves.js
-const LITTER_DECAY = 0.32; // depth units a fallen leaf lasts on the ground
+const LITTER_DECAY = 0.6; // depth units a fallen leaf lasts on the ground
 
 const AUTUMN = ['#d8b04a', '#c99a3c', '#b8642a', '#94603a', '#c0883a', '#a89850'].map((c) => new THREE.Color(c));
 
@@ -89,6 +89,9 @@ export function createLeafFall(branches) {
     if (now < lastNow - 1e-6) clear();
     lastNow = now;
     for (const at of released) {
+      // A leaf may carry its own colour (lost species fall red); else autumn.
+      falling.setColorAt(cursor, at.color ?? AUTUMN[cursor % AUTUMN.length]);
+      if (falling.instanceColor) falling.instanceColor.needsUpdate = true;
       const p = pool[cursor];
       cursor = (cursor + 1) % FALLING;
       p.active = true;
@@ -162,13 +165,13 @@ function placeLitter(litter, branches) {
     const i = Math.floor(rand() * br.points.length);
     const p = br.points[i];
     // Leaves from higher up drift further before they land.
-    const spread = 0.35 + 0.18 * Math.max(0, p.y);
+    const spread = 0.5 + 0.22 * Math.max(0, p.y);
     const gx = (rand() + rand() + rand() - 1.5) * spread * 1.4;
     const gz = (rand() + rand() + rand() - 1.5) * spread * 1.4;
     pos.set(p.x + gx, 0, p.z + gz);
     pos.y = groundY(pos.x, pos.z) + 0.012 + rand() * 0.012;
     q.setFromAxisAngle(up, rand() * Math.PI * 2);
-    const s = rand.range(0.16, 0.24);
+    const s = rand.range(0.2, 0.32);
     m4.compose(pos, q, scl.set(s, s, s));
     litter.setMatrixAt(k, m4);
     fallen[k] = br.depths[i] + LEAF_LIFE * rand.range(0.9, 1.6);

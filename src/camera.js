@@ -1,6 +1,7 @@
 // Orbit camera. During replay it follows the growing tip of the followed
 // lineage, close enough to watch the forks, and drifts slowly around the
-// tree. When time reaches today it pulls back to show the whole tree.
+// tree. When time reaches today it settles close on the followed species'
+// leaf; pulling back to see the whole tree is left to you.
 // Once you drag or zoom, it stays where you put it until playback starts
 // again. Wheel and pinch zoom toward the cursor; flyTo() glides to a point.
 import * as THREE from 'three';
@@ -41,7 +42,7 @@ export function createCamera(canvas) {
 
   /**
    * @param {number} dt seconds
-   * @param {{center: THREE.Vector3, radius: number, tip: THREE.Vector3, finished: boolean}} view
+   * @param {{center: THREE.Vector3, radius: number, tip: THREE.Vector3, finished: boolean, leaf?: THREE.Vector3, leafDistance?: number}} view
    */
   function update(dt, view) {
     if (fly) {
@@ -65,15 +66,14 @@ export function createCamera(canvas) {
       const k = 1 - Math.exp(-dt * (view.finished ? 0.7 : 1.6));
       const fit = view.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.min(1, camera.aspect);
       let desiredDistance;
-      if (view.finished) {
-        desiredTarget.copy(view.center);
-        desiredDistance = fit * 1.0;
+      if (view.finished && view.leaf) {
+        desiredTarget.copy(view.leaf);
+        desiredDistance = THREE.MathUtils.clamp(view.leafDistance ?? 1, 0.3, 4);
       } else {
         // Close on the tip while the tree is small, then a little wider.
         desiredTarget.lerpVectors(view.tip, view.center, 0.3);
-        desiredDistance = 0.6 + fit * 0.55;
+        desiredDistance = THREE.MathUtils.clamp(0.6 + fit * 0.55, 0.9, 110);
       }
-      desiredDistance = THREE.MathUtils.clamp(desiredDistance, 0.9, 110);
 
       before.copy(controls.target);
       controls.target.lerp(desiredTarget, k);
