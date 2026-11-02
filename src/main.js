@@ -37,7 +37,8 @@ addPlaceholderForks(tree);
 let mode = location.hash === '#natural' ? 'natural' : 'fractal'; // fractal is the default
 let branches, treeMesh, branchTex, leaves, leafFall, dust;
 // Tiny-leaf budget: fewer on small screens (phones).
-const DUST_BUDGET = Math.min(window.innerWidth, window.innerHeight) < 600 ? 45000 : 140000;
+const SMALL_SCREEN = Math.min(window.innerWidth, window.innerHeight) < 600;
+const DUST_BUDGET = SMALL_SCREEN ? { budget: 60000, sprigBudget: 3500 } : { budget: 170000, sprigBudget: 9000 };
 function build() {
   for (const part of [treeMesh?.mesh, leaves?.group, leafFall?.group, dust?.mesh]) {
     if (!part) continue;
@@ -53,7 +54,7 @@ function build() {
   branchTex = createBranchTexture(branches);
   leaves = createLeaves(branches, branchTex);
   leafFall = createLeafFall(branches);
-  dust = createFoliageDust(branches, branchTex, { budget: DUST_BUDGET });
+  dust = createFoliageDust(branches, branchTex, DUST_BUDGET);
   scene.add(treeMesh.mesh, leaves.group, leafFall.group, dust.mesh);
 }
 build();
@@ -271,7 +272,7 @@ function frame(time) {
   // Level of detail: from far away, fewer (larger) foliage cards.
   const detail = ((sphere.radius * 1.6) / Math.max(dist, 0.1)) ** 2;
   leaves.setDetail(detail);
-  dust.setDetail(detail);
+  dust.setDetail(SMALL_SCREEN ? 6 : 9);
   dust.update(now, renderer, camera);
   // Clear the view to the followed leaf when the camera is close to it.
   if (clock.ma <= tree.focus.splitMa) {
