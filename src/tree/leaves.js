@@ -62,12 +62,13 @@ export function createLeaves(branches, branchTex) {
     const d0 = br.depths[0];
     const d1 = br.depths.at(-1);
     let rand = createRandom(`${br.node.id}-leaves`);
-    const count = Math.floor(br.length / LEAF_SPACING);
+    const ls = br.leafScale ?? 1;
+    const count = Math.floor(br.length / (LEAF_SPACING * ls));
     for (let k = 0; k < count; k++) {
       const dist = (k + rand.range(0.3, 0.9)) * LEAF_SPACING;
       const depth = d0 + (dist / br.length) * (d1 - d0);
       const angle = k * 2.39996 + rand.range(-0.3, 0.3); // golden-angle phyllotaxis
-      leafInst.push([br, 0, depth, angle, rand.range(0.7, 1.15), rand.range(0.2, 0.28), rand.range(-0.03, 0.03)]);
+      leafInst.push([br, 0, depth, angle, rand.range(0.7, 1.15), rand.range(0.2, 0.28) * ls, rand.range(-0.03, 0.03)]);
       slots.push({ br, depth, angle });
     }
     rand = createRandom(`${br.node.id}-tuft`);
@@ -75,11 +76,11 @@ export function createLeaves(branches, branchTex) {
     const living = !br.node.children.length && !br.node.endMa;
     if (species === 1) {
       // A single species: one leaf, right at the tip.
-      leafInst.push([br, 1, 0.0003, 0, 0.12, 0.26, 0.02]);
+      leafInst.push([br, 1, 0.0003, 0, 0.12, 0.26 * ls, 0.02]);
     } else {
       const tips = Math.min(species, TUFT_MAX);
       for (let k = 0; k < tips; k++) {
-        leafInst.push([br, 1, (k / tips) * 0.006 + 0.0006, k * 2.39996 + rand.range(-0.3, 0.3), rand.range(0.35, 0.8), rand.range(0.16, 0.24), rand.range(-0.03, 0.03)]);
+        leafInst.push([br, 1, (k / tips) * 0.006 + 0.0006, k * 2.39996 + rand.range(-0.3, 0.3), rand.range(0.35, 0.8), rand.range(0.16, 0.24) * ls, rand.range(-0.03, 0.03)]);
       }
     }
     if (living && species > TUFT_MAX) {
@@ -87,7 +88,7 @@ export function createLeaves(branches, branchTex) {
       // count (1,000 species ~0.7, a million ~2.2 world units); the number of
       // cards grows with its surface.
       rand = createRandom(`${br.node.id}-foliage`);
-      const R = 0.22 * Math.pow(species, 1 / 6);
+      const R = 0.22 * Math.pow(species, 1 / 6) * ls;
       const cards = Math.round(THREE.MathUtils.clamp(12 * (R / 0.7) ** 2, 2, 160));
       for (let k = 0; k < cards; k++) {
         let x, y, z;
@@ -97,7 +98,7 @@ export function createLeaves(branches, branchTex) {
           z = rand.range(-1, 1);
         } while (x * x + y * y + z * z > 1);
         const cluster = [x * R * 0.8 + R * 0.35, y * R, z * R];
-        sprayInst.push([br, 1, 0, 0, rand.range(0.3, 1.0), rand.range(0.4, 0.62), rand.range(-0.06, 0.05), cluster, rand()]);
+        sprayInst.push([br, 1, 0, 0, rand.range(0.3, 1.0), rand.range(0.4, 0.62) * ls, rand.range(-0.06, 0.05), cluster, rand()]);
       }
     }
   }

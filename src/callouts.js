@@ -51,6 +51,7 @@ export function createCallouts({ onPick } = {}) {
     c.copy(center).project(camera);
     const cx = (c.x * 0.5 + 0.5) * w;
     const cy = (-c.y * 0.5 + 0.5) * h;
+    const bar = document.querySelector('.topbar')?.getBoundingClientRect();
     const placed = [];
     const seen = new Set();
 
@@ -81,6 +82,8 @@ export function createCallouts({ onPick } = {}) {
       ly = Math.min(Math.max(ly, MARGIN), bottomLimit - lh);
       // Keep clear of the counter in the top-left corner.
       if (left < 250 && ly < 150) ly = 150;
+      // ...and below the mode and species controls at the top right.
+      if (bar && left + lw > bar.left - 8 && ly < bar.bottom + 8) ly = bar.bottom + 8;
       for (let tries = 0; tries < 6; tries++) {
         const hit = placed.find((r) => left < r.x + r.w + 8 && left + lw + 8 > r.x && ly < r.y + r.h + 2 && ly + lh + 2 > r.y);
         if (!hit) break;

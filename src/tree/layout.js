@@ -21,6 +21,8 @@ const MIN_SLENDERNESS = 1 / 45;
 // Life's first fork is very early, so the trunk would be a stub. A mother
 // tree stands on a tall bole: the first segment gets at least this length.
 const TRUNK_MIN = 3.4;
+// Fractal mode: length scale of the whole tree's crown.
+const FRACTAL_L0 = 4.2;
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -82,27 +84,49 @@ export function addPlaceholderForks(tree) {
  *   dists[] (along this branch) and paths[] (distance from the seed, continuous
  *   across forks so bark twist and fluting run on without a seam).
  * Roots (`isRoot`) come last; they carry no leaves.
+ *
+ * Two shapes ("modes"); growth always follows the real dates:
+ *  - natural: branch length follows time, like a real tree.
+ *  - fractal: branch length follows species count, as in OneZoom. Each
+ *    sub-branch is a smaller copy of the whole (length and thickness both
+ *    scale with species^0.2), a fork where a small lineage buds off is only
+ *    a short step along the limb, and leaves shrink with their twig, so you
+ *    can follow the branching all the way down to any single leaf.
  */
-export function layoutTree(tree) {
+export function layoutTree(tree, { mode = 'natural' } = {}) {
   const rootSpecies = tree.root.species;
   const branches = [];
+  const fractal = mode === 'fractal';
+  // Size of a sub-tree in fractal mode, from its species count.
+  const scale = (species) => FRACTAL_L0 * Math.pow(species / rootSpecies, 0.2);
 
   const grow = (node, start, dir, phase, startNormal = null, startPath = 0, leader = true) => {
     const endMa = node.children.length ? node.children[0].splitMa : node.endMa ?? 0;
     const s0 = depthAt(node.splitMa);
     const s1 = depthAt(endMa);
-    const length = Math.max(node === tree.root ? TRUNK_MIN : STEP, (s1 - s0) * TREE_HEIGHT);
+    let length;
+    if (fractal) {
+      // A limb runs on until its next fork; the more the fork takes away, the longer the step.
+      const biggest = node.children.length ? Math.max(...node.children.map((c) => c.species)) / node.species : 0;
+      length = scale(node.species) * (node.children.length ? 0.18 + 1.1 * Math.sqrt(1 - biggest) : 0.9);
+    } else {
+      length = (s1 - s0) * TREE_HEIGHT;
+    }
+    length = Math.max(node === tree.root ? TRUNK_MIN : fractal ? 0.03 : STEP, length);
     const rand = createRandom(node.id);
     // Long side limbs sag under their weight, then turn up toward the light.
-    const sag = leader ? 0 : 0.14 * Math.min(1, length / 6);
-    const branch = buildCenterline(node, start, dir, length, s0, s1, rand, startNormal, startPath, false, sag);
+    const sag = leader || fractal ? 0 : 0.14 * Math.min(1, length / 6);
+    const branch = buildCenterline(node, start, dir, length, s0, s1, rand, startNormal, startPath, false, sag, fractal ? 0.35 : 1);
     branch.node = node;
     node.branch = branch;
+    // Leaves are scaled with their twig in fractal mode, so detail nests.
+    branch.leafScale = fractal ? THREE.MathUtils.clamp(scale(node.species) / 0.55, 0.12, 1) : 1;
 
     // Radius: from this node's own pipe size at the base toward the biggest
     // child's at the end, so the leader continues without a step.
-    const rSelf = woodRadius(node, rootSpecies);
-    const rEnd = node.children.length ? Math.max(...node.children.map((c) => woodRadius(c, rootSpecies))) : rSelf * 0.7;
+    const radius = fractal ? (n) => radiusFor(n.species, rootSpecies) : (n) => woodRadius(n, rootSpecies);
+    const rSelf = radius(node);
+    const rEnd = node.children.length ? Math.max(...node.children.map(radius)) : rSelf * 0.7;
     branch.radii = branch.depths.map((_, i) => {
       const u = i / (branch.depths.length - 1);
       const dist = branch.dists[i];
@@ -127,7 +151,11 @@ export function layoutTree(tree) {
     kids.forEach((child, k) => {
       const share = child.species / total;
       const leader = k === 0;
-      const theta = THREE.MathUtils.degToRad(leader ? 6 + 40 * Math.pow(1 - share, 1.6) : 22 + 48 * Math.pow(1 - share, 1.2));
+      const theta = THREE.MathUtils.degToRad(
+        fractal
+          ? leader ? 4 + 30 * Math.pow(1 - share, 1.5) : 34 + 40 * Math.pow(1 - share, 1.2)
+          : leader ? 6 + 40 * Math.pow(1 - share, 1.6) : 22 + 48 * Math.pow(1 - share, 1.2),
+      );
       const az = baseAz + (k * Math.PI * 2) / kids.length;
       const side = n.clone().multiplyScalar(Math.cos(az)).addScaledVector(b, Math.sin(az));
       const childDir = endDir.clone().multiplyScalar(Math.cos(theta)).addScaledVector(side, Math.sin(theta)).normalize();
@@ -177,7 +205,7 @@ function addRoots(branches, rootSpecies) {
   }
 }
 
-function buildCenterline(node, start, dir, length, s0, s1, rand, startNormal = null, startPath = 0, flat = false, sag = 0) {
+function buildCenterline(node, start, dir, length, s0, s1, rand, startNormal = null, startPath = 0, flat = false, sag = 0, gnarl = 1) {
   const count = Math.max(3, Math.ceil(length / STEP));
   const step = length / count;
   const points = [start.clone()];
@@ -185,7 +213,7 @@ function buildCenterline(node, start, dir, length, s0, s1, rand, startNormal = n
   // Seeded wander, sudden kinks (old wood is gnarled), and a pull upward
   // (branches curve toward the light).
   const tropism = flat ? 0 : node.parentNode ? rand.range(0.03, 0.1) : 0.05;
-  const wander = rand.range(0.04, 0.08);
+  const wander = rand.range(0.04, 0.08) * gnarl;
   let nextKink = rand.range(0.4, 1.2);
   const kinkAxis = new THREE.Vector3();
   const f1 = rand.range(0.4, 1.1);
@@ -205,7 +233,7 @@ function buildCenterline(node, start, dir, length, s0, s1, rand, startNormal = n
       .normalize();
     if (t >= nextKink) {
       kinkAxis.copy(tmpSide).multiplyScalar(rand.range(-1, 1)).addScaledVector(tmpSide2, rand.range(-1, 1)).normalize();
-      d.applyAxisAngle(kinkAxis, rand.range(0.1, 0.28));
+      d.applyAxisAngle(kinkAxis, rand.range(0.1, 0.28) * gnarl);
       if (flat) d.y = Math.min(d.y, 0);
       d.normalize();
       nextKink = t + rand.range(0.5, 1.4);

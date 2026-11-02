@@ -25,6 +25,8 @@ export function createCamera(canvas) {
   let interacting = false;
   let manual = false; // the user has taken the camera
   let fly = null;
+  let track = null; // () => point the camera keeps centred (after flyTo)
+  const trackLast = new THREE.Vector3();
   controls.addEventListener('start', () => {
     interacting = true;
     manual = true;
@@ -45,10 +47,20 @@ export function createCamera(canvas) {
     if (fly) {
       fly.t = Math.min(1, fly.t + dt / fly.duration);
       const e = fly.t * fly.t * (3 - 2 * fly.t);
-      controls.target.lerpVectors(fly.fromTarget, fly.toTarget, e);
+      controls.target.lerpVectors(fly.fromTarget, track ? track() : fly.toTarget, e);
       offset.copy(fly.fromOffset).lerp(fly.toOffset, e);
       camera.position.copy(controls.target).add(offset);
-      if (fly.t >= 1) fly = null;
+      if (fly.t >= 1) {
+        fly = null;
+        if (track) trackLast.copy(track());
+      }
+    } else if (track) {
+      // Keep what we flew to in the middle as it sways; orbiting still works.
+      const p = track();
+      before.subVectors(p, trackLast);
+      controls.target.add(before);
+      camera.position.add(before);
+      trackLast.copy(p);
     } else if (!interacting && !manual) {
       const k = 1 - Math.exp(-dt * (view.finished ? 0.7 : 1.6));
       const fit = view.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.min(1, camera.aspect);
@@ -76,15 +88,19 @@ export function createCamera(canvas) {
     controls.update();
   }
 
-  /** Glide to look at a point from a given distance; the camera then stays there. */
+  /**
+   * Glide to look at a point from a given distance. `point` may be a function
+   * returning the current position: the camera then keeps it centred.
+   */
   function flyTo(point, distance) {
     manual = true;
+    track = typeof point === 'function' ? point : null;
     const fromOffset = camera.position.clone().sub(controls.target);
     fly = {
       t: 0,
       duration: 1.4,
       fromTarget: controls.target.clone(),
-      toTarget: point.clone(),
+      toTarget: track ? null : point.clone(),
       fromOffset,
       toOffset: fromOffset.clone().setLength(distance),
     };
@@ -94,6 +110,7 @@ export function createCamera(canvas) {
   function release() {
     manual = false;
     fly = null;
+    track = null;
   }
 
   return { camera, controls, update, flyTo, release };

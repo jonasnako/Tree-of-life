@@ -80,8 +80,13 @@ export function createLeafFall(branches) {
    * @param {number} now current depth
    * @param {THREE.Vector3[]} released positions of leaves that just let go
    */
+  let lastNow = 0;
   function update(dt, now, released) {
     litterUniforms.uNow.value = now;
+    // Time went back (restart, rewind, another species): leaves still in
+    // the air came from a crown that does not exist yet, so clear them.
+    if (now < lastNow - 1e-6) clear();
+    lastNow = now;
     for (const at of released) {
       const p = pool[cursor];
       cursor = (cursor + 1) % FALLING;
@@ -123,7 +128,15 @@ export function createLeafFall(branches) {
     falling.instanceMatrix.needsUpdate = true;
   }
 
-  return { group, update };
+  function clear() {
+    for (let i = 0; i < FALLING; i++) {
+      pool[i].active = false;
+      falling.setMatrixAt(i, zero);
+    }
+    falling.instanceMatrix.needsUpdate = true;
+  }
+
+  return { group, update, clear };
 }
 
 /** Scatter litter under where leaves grew, timed to when they died. */

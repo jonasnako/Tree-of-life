@@ -26,16 +26,31 @@ const { renderer, scene, sun, sky } = createScene(canvas);
 const { camera, controls, update: updateCamera, flyTo, release: releaseCamera } = createCamera(canvas);
 handleResize(renderer, camera);
 
-// Data -> layout -> meshes.
+// Data -> layout -> meshes. The shape can be rebuilt in another mode
+// (natural or fractal, see layout.js); the data stays the same.
 const tree = loadTree();
 setOrigin(tree.originMa);
 addPlaceholderForks(tree);
-const branches = layoutTree(tree);
-const treeMesh = createTreeMesh(branches);
-const branchTex = createBranchTexture(branches);
-const leaves = createLeaves(branches, branchTex);
-const leafFall = createLeafFall(branches);
-scene.add(treeMesh.mesh, leaves.group, leafFall.group);
+let mode = location.hash === '#fractal' ? 'fractal' : 'natural';
+let branches, treeMesh, branchTex, leaves, leafFall;
+function build() {
+  for (const part of [treeMesh?.mesh, leaves?.group, leafFall?.group]) {
+    if (!part) continue;
+    scene.remove(part);
+    part.traverse((o) => {
+      o.geometry?.dispose();
+      o.material?.dispose();
+    });
+  }
+  branchTex?.texture.dispose();
+  branches = layoutTree(tree, { mode });
+  treeMesh = createTreeMesh(branches);
+  branchTex = createBranchTexture(branches);
+  leaves = createLeaves(branches, branchTex);
+  leafFall = createLeafFall(branches);
+  scene.add(treeMesh.mesh, leaves.group, leafFall.group);
+}
+build();
 
 // Depth grows at a steady visual pace; the counter shows real Ma.
 const clock = new GrowthClock({
@@ -60,7 +75,10 @@ function lineageEvents() {
 }
 const SHOWN_FORKS = 3; // the most recent forks keep their callouts
 // Clicking a label flies to the branch or leaf it points at.
-const callouts = createCallouts({ onPick: (c) => flyTo(c.anchor, c.kind === 'focus' ? 0.7 : 3.5) });
+const callouts = createCallouts({
+  onPick: (c) => flyTo(c.track ?? c.anchor, c.kind === 'focus' ? 0.25 + 0.5 * (tree.focus.branch.leafScale ?? 1) : mode === 'fractal' ? 2 : 3.5),
+});
+const nowDepth = () => depthAt(clock.ma);
 const anchor = new THREE.Vector3();
 const sway = new THREE.Vector3();
 const radialV = new THREE.Vector3();
@@ -79,13 +97,20 @@ function updateCallouts(now) {
     anchor.add(windSway(anchor, now - depth, sway)); // move with the wind, as the wood does
     const fresh = Math.min(1, (now - d0) / 0.004);
     const sub = `${formatMa(e.ma)} Ma · ${speciesFmt.format(e.sister.species)} species${e.others ? ` · +${e.others} more lineage${e.others > 1 ? 's' : ''}` : ''}`;
-    list.push({ key: e.sister.id, title: displayName(e.sister), sub, anchor: anchor.clone(), alpha: fresh * [0.55, 0.75, 1][k + SHOWN_FORKS - past.length] });
+    const track = () => {
+      const n = nowDepth();
+      const d = Math.max(d0, Math.min(n, d0 + (d1 - d0) * 0.45, d1));
+      const p = pointAt(br, d, new THREE.Vector3());
+      return p.add(windSway(p, n - d, new THREE.Vector3()));
+    };
+    list.push({ key: e.sister.id, title: displayName(e.sister), sub, anchor: anchor.clone(), track, alpha: fresh * [0.55, 0.75, 1][k + SHOWN_FORKS - past.length] });
   });
   // The followed species: the middle of its own single leaf at the tip of
   // its twig (same placement as the leaf shader).
   if (clock.ma <= tree.focus.splitMa) {
     leafCentre(tree.focus.branch, now, anchor);
-    list.push({ key: 'focus', kind: 'focus', title: tree.focusLabel, sub: tree.focus.name, anchor: anchor.clone() });
+    const br = tree.focus.branch;
+    list.push({ key: 'focus', kind: 'focus', title: tree.focusLabel, sub: tree.focus.name, anchor: anchor.clone(), track: () => leafCentre(br, nowDepth(), new THREE.Vector3()) });
   }
   callouts.update(list, camera, sphere.center);
 }
@@ -101,7 +126,7 @@ function leafCentre(br, now, out) {
   out.addScaledVector(radialV, br.radii[i] * thicknessAt(age) * 0.9);
   const tilt = 0.12 * open;
   leafY.copy(br.tangents[i]).multiplyScalar(Math.cos(tilt)).addScaledVector(radialV, Math.sin(tilt)).normalize();
-  const size = 0.26 * (0.25 + 0.75 * open);
+  const size = 0.26 * (br.leafScale ?? 1) * (0.25 + 0.75 * open);
   out.add(windSway(out, age, sway)).addScaledVector(leafY, size * 0.5);
   return out;
 }
@@ -109,6 +134,23 @@ const ui = createUI(clock, lineageEvents());
 // Playback hands the camera back to the automatic framing.
 clock.onChange(() => { if (clock.playing) releaseCamera(); });
 document.getElementById('restart').addEventListener('click', releaseCamera);
+
+// Shape mode: natural (time sets branch length) or fractal (species do).
+const modeButtons = document.querySelectorAll('[data-mode]');
+function setMode(next) {
+  mode = next;
+  modeButtons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
+  history.replaceState(null, '', mode === 'fractal' ? '#fractal' : location.pathname + location.search);
+}
+modeButtons.forEach((b) =>
+  b.addEventListener('click', () => {
+    if (b.dataset.mode === mode) return;
+    setMode(b.dataset.mode);
+    build();
+    releaseCamera();
+  }),
+);
+setMode(mode);
 
 // Pick whose lineage to follow; the replay starts again from the seed.
 const focusSelect = document.getElementById('focus');
@@ -199,4 +241,4 @@ function frame(time) {
 requestAnimationFrame(frame);
 
 // Handy from the browser console, e.g. treeOfLife.clock.ma = 600.
-window.treeOfLife = { clock, tree, branches, leaves, treeMesh, camera, controls };
+window.treeOfLife = { clock, tree, get branches() { return branches; }, get leaves() { return leaves; }, get treeMesh() { return treeMesh; }, camera, controls, setMode: (m) => { setMode(m); build(); }, focusLeaf: () => leafCentre(tree.focus.branch, depthAt(clock.ma), new THREE.Vector3()) };
