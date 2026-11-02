@@ -14,7 +14,7 @@ import { createCallouts } from './callouts.js';
 import { addPlaceholderForks, layoutTree, locate } from './tree/layout.js';
 import { createTreeMesh } from './tree/treeMesh.js';
 import { thicknessAt } from './tree/growth.js';
-import { createLeaves, leafLight } from './tree/leaves.js';
+import { createLeaves, leafLight, STATUS } from './tree/leaves.js';
 import { createBranchTexture } from './tree/branchTexture.js';
 import { createLeafFall } from './tree/leafFall.js';
 import { windUniforms, windSway } from './wind.js';
@@ -31,7 +31,7 @@ handleResize(renderer, camera);
 const tree = loadTree();
 setOrigin(tree.originMa);
 addPlaceholderForks(tree);
-let mode = location.hash === '#fractal' ? 'fractal' : 'natural';
+let mode = location.hash === '#natural' ? 'natural' : 'fractal'; // fractal is the default
 let branches, treeMesh, branchTex, leaves, leafFall;
 function build() {
   for (const part of [treeMesh?.mesh, leaves?.group, leafFall?.group]) {
@@ -61,7 +61,15 @@ const clock = new GrowthClock({
 
 // Forks on the followed lineage: each new sister lineage gets a callout
 // pointing at its branch, and a tick on the timeline.
-const displayName = (n) => (n.common ? `${n.common} (${n.name})` : n.name);
+const displayName = (n) => n.common ?? n.name;
+const statusLabel = Object.fromEntries(STATUS.map((s) => [s.code, s.label]));
+/** "2 species · 2 critically endangered" style summary of a lineage's listed species. */
+function statusSummary(n) {
+  if (!n.leaves) return '';
+  const counts = {};
+  for (const l of n.leaves) if (['VU', 'EN', 'CR'].includes(l.status)) counts[l.status] = (counts[l.status] ?? 0) + 1;
+  return ['CR', 'EN', 'VU'].filter((c) => counts[c]).map((c) => ` · ${counts[c]} ${statusLabel[c].toLowerCase()}`).join('');
+}
 const speciesFmt = new Intl.NumberFormat('en-US');
 function lineageEvents() {
   const events = [];
@@ -76,7 +84,8 @@ function lineageEvents() {
 const SHOWN_FORKS = 3; // the most recent forks keep their callouts
 // Clicking a label flies to the branch or leaf it points at.
 const callouts = createCallouts({
-  onPick: (c) => flyTo(c.track ?? c.anchor, c.kind === 'focus' ? 0.25 + 0.5 * (tree.focus.branch.leafScale ?? 1) : mode === 'fractal' ? 2 : 3.5),
+  onPick: (c) =>
+    flyTo(c.track ?? c.anchor, c.kind === 'focus' ? 0.25 + 0.5 * (tree.focus.branch.leafScale ?? 1) : mode === 'fractal' ? 0.5 + 2 * (c.scale ?? 1) : 3.5),
 });
 const nowDepth = () => depthAt(clock.ma);
 const anchor = new THREE.Vector3();
@@ -91,26 +100,31 @@ function updateCallouts(now) {
     const br = e.sister.branch;
     const d0 = br.depths[0];
     const d1 = br.depths.at(-1);
-    // Point partway along the new branch, never past its growing tip.
-    const depth = Math.min(now, d0 + (d1 - d0) * 0.45, d1);
+    // Point partway along the new branch (never past its growing tip), or at
+    // the leaves themselves when the lineage is a few listed species.
+    const at = e.sister.leaves ? 1 : 0.45;
+    const depth = Math.min(now, d0 + (d1 - d0) * at, d1);
     pointAt(br, Math.max(d0, depth), anchor);
     anchor.add(windSway(anchor, now - depth, sway)); // move with the wind, as the wood does
     const fresh = Math.min(1, (now - d0) / 0.004);
-    const sub = `${formatMa(e.ma)} Ma · ${speciesFmt.format(e.sister.species)} species${e.others ? ` · +${e.others} more lineage${e.others > 1 ? 's' : ''}` : ''}`;
+    const sci = e.sister.common ? `${e.sister.name} · ` : '';
+    const sub = `${sci}${formatMa(e.ma)} Ma · ${speciesFmt.format(e.sister.species)} species${statusSummary(e.sister)}${e.others ? ` · +${e.others} more` : ''}`;
     const track = () => {
       const n = nowDepth();
-      const d = Math.max(d0, Math.min(n, d0 + (d1 - d0) * 0.45, d1));
+      const d = Math.max(d0, Math.min(n, d0 + (d1 - d0) * at, d1));
       const p = pointAt(br, d, new THREE.Vector3());
       return p.add(windSway(p, n - d, new THREE.Vector3()));
     };
-    list.push({ key: e.sister.id, title: displayName(e.sister), sub, anchor: anchor.clone(), track, alpha: fresh * [0.55, 0.75, 1][k + SHOWN_FORKS - past.length] });
+    list.push({ key: e.sister.id, title: displayName(e.sister), sub, anchor: anchor.clone(), track, scale: br.leafScale ?? 1, alpha: fresh * [0.55, 0.75, 1][k + SHOWN_FORKS - past.length] });
   });
   // The followed species: the middle of its own single leaf at the tip of
   // its twig (same placement as the leaf shader).
   if (clock.ma <= tree.focus.splitMa) {
     leafCentre(tree.focus.branch, now, anchor);
     const br = tree.focus.branch;
-    list.push({ key: 'focus', kind: 'focus', title: tree.focusLabel, sub: tree.focus.name, anchor: anchor.clone(), track: () => leafCentre(br, nowDepth(), new THREE.Vector3()) });
+    const status = tree.focus.leaves?.[0]?.status;
+    const sub = status ? `${tree.focus.name} · ${statusLabel[status]}` : `${tree.focus.name} · not assessed`;
+    list.push({ key: 'focus', kind: 'focus', title: tree.focusLabel, sub, anchor: anchor.clone(), track: () => leafCentre(br, nowDepth(), new THREE.Vector3()) });
   }
   callouts.update(list, camera, sphere.center);
 }
@@ -135,12 +149,17 @@ const ui = createUI(clock, lineageEvents());
 clock.onChange(() => { if (clock.playing) releaseCamera(); });
 document.getElementById('restart').addEventListener('click', releaseCamera);
 
+// Legend for leaf colours.
+document.getElementById('legend').innerHTML =
+  '<span class="legend-title">Leaf colour · IUCN Red List</span>' +
+  STATUS.map((st) => `<span class="legend-item" title="${st.label}"><i style="background:${st.color}"></i>${st.code}</span>`).join('');
+
 // Shape mode: natural (time sets branch length) or fractal (species do).
 const modeButtons = document.querySelectorAll('[data-mode]');
 function setMode(next) {
   mode = next;
   modeButtons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
-  history.replaceState(null, '', mode === 'fractal' ? '#fractal' : location.pathname + location.search);
+  history.replaceState(null, '', mode === 'natural' ? '#natural' : location.pathname + location.search);
 }
 modeButtons.forEach((b) =>
   b.addEventListener('click', () => {

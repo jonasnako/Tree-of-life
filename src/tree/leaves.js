@@ -11,7 +11,9 @@
 //   shoot leaves  - born at a fixed depth just behind the tip, live LEAF_LIFE
 //   tip leaves    - ride the growing tip of a branch and stay on living tips:
 //                   one leaf per species (a one-species tip ends in exactly
-//                   one leaf), up to TUFT_MAX
+//                   one leaf), up to TUFT_MAX. Where the data lists the
+//                   species, each leaf is coloured by its IUCN status (step 6)
+//                   and fossil species grow no leaf.
 //   foliage       - for rich clades alive today: a cloud of leafy cards around
 //                   the tip whose size grows with the species count (step 5),
 //                   filling in slowly as the clade ages. Cards are shuffled,
@@ -44,6 +46,16 @@ const SPRAY_REACH = 0.03; // depth behind a growing tip that carries sprays
 const COTYLEDON_HEIGHT = 0.32; // world units up the seedling stem
 
 const FRESH = new THREE.Color('#79c043');
+// IUCN Red List status -> leaf colour, healthy green to autumn red.
+export const STATUS = [
+  { code: 'LC', label: 'Least concern', color: '#4f9e2c' },
+  { code: 'NT', label: 'Near threatened', color: '#a3b52e' },
+  { code: 'VU', label: 'Vulnerable', color: '#e2b42a' },
+  { code: 'EN', label: 'Endangered', color: '#e07722' },
+  { code: 'CR', label: 'Critically endangered', color: '#c8301c' },
+  { code: 'DD', label: 'Data deficient', color: '#8f9c80' },
+];
+const STATUS_INDEX = Object.fromEntries(STATUS.map((s, i) => [s.code, i + 1]));
 const MATURE = new THREE.Color('#3f7d2a');
 const AUTUMN = new THREE.Color('#c9a23a');
 const SEED_LEAF = new THREE.Color('#9acb5a');
@@ -74,13 +86,19 @@ export function createLeaves(branches, branchTex) {
     rand = createRandom(`${br.node.id}-tuft`);
     const species = br.node.species ?? 1;
     const living = !br.node.children.length && !br.node.endMa;
-    if (species === 1) {
+    const listed = br.node.leaves; // species with status, where the data has them
+    const status = (l) => [STATUS_INDEX[l?.status] ?? 0, 0, 0];
+    if (species === 1 || listed?.length === 1) {
       // A single species: one leaf, right at the tip.
-      leafInst.push([br, 1, 0.0003, 0, 0.12, 0.26 * ls, 0.02]);
+      if (!listed?.[0]?.extinct) leafInst.push([br, 1, 0.0003, 0, 0.12, 0.26 * ls, 0.02, status(listed?.[0])]);
     } else {
-      const tips = Math.min(species, TUFT_MAX);
+      const tips = listed ? listed.length : Math.min(species, TUFT_MAX);
       for (let k = 0; k < tips; k++) {
-        leafInst.push([br, 1, (k / tips) * 0.006 + 0.0006, k * 2.39996 + rand.range(-0.3, 0.3), rand.range(0.35, 0.8), rand.range(0.16, 0.24) * ls, rand.range(-0.03, 0.03)]);
+        const angle = k * 2.39996 + rand.range(-0.3, 0.3);
+        const tilt = rand.range(0.35, 0.8);
+        const size = rand.range(0.16, 0.24) * ls;
+        if (listed?.[k]?.extinct) continue; // a fossil species: its place stays bare
+        leafInst.push([br, 1, (k / tips) * 0.006 + 0.0006, angle, tilt, size, rand.range(-0.03, 0.03), status(listed?.[k])]);
       }
     }
     if (living && species > TUFT_MAX) {
@@ -267,6 +285,8 @@ function gpuLeafMesh(base, inst, branchTex, material) {
 
 const glslColor = (c) => `vec3(${c.r.toFixed(4)}, ${c.g.toFixed(4)}, ${c.b.toFixed(4)})`;
 
+const STATUS_GLSL = STATUS.map((s, i) => `sc < ${i + 1.5} ? ${glslColor(new THREE.Color(s.color))} : `).join('') + glslColor(FRESH);
+
 const GPU_LEAF_VERTEX_HEADER = /* glsl */ `
 attribute vec4 aBranch; // first sample, sample count, start depth, end depth
 attribute vec4 aMode;   // mode (0 shoot leaf, 1 rides the tip), depth or lag, living, -
@@ -321,6 +341,9 @@ void computeLeaf(out vec3 outPos, out vec3 outNormal) {
       vLeafColor = mix(${glslColor(MATURE)}, ${glslColor(FRESH)}, clamp(0.35 + aShape.w * 3.0, 0.0, 1.0)) * (1.0 + aShape.w);
     #else
       vLeafColor = ${glslColor(FRESH)} * (1.0 + aShape.w);
+      // Conservation status (aCluster.x: 0 none, 1..6 = STATUS order).
+      float sc = aCluster.x;
+      if (sc > 0.5) vLeafColor = ${STATUS_GLSL};
     #endif
   }
   float age = uNow - depth;

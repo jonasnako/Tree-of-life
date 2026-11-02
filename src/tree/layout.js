@@ -48,6 +48,7 @@ function woodRadius(node, rootSpecies) {
 export function addPlaceholderForks(tree) {
   const visit = (node) => {
     if (node.children.length) return node.children.forEach(visit);
+    if (node.leaves) return; // real species listed: no stand-in forks
     // Rich clades fork more; so do long lone limbs, so they don't read as
     // whips. Never more stand-in tips than the clade has species.
     const byRichness = Math.floor(Math.log10(node.species)) - 2;
@@ -120,7 +121,7 @@ export function layoutTree(tree, { mode = 'natural' } = {}) {
     branch.node = node;
     node.branch = branch;
     // Leaves are scaled with their twig in fractal mode, so detail nests.
-    branch.leafScale = fractal ? THREE.MathUtils.clamp(scale(node.species) / 0.55, 0.12, 1) : 1;
+    branch.leafScale = fractal ? THREE.MathUtils.clamp(scale(node.species) / 0.35, 0.25, 1) : 1;
 
     // Radius: from this node's own pipe size at the base toward the biggest
     // child's at the end, so the leader continues without a step.

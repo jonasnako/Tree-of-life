@@ -55,6 +55,27 @@ html, body {
   color: var(--accent);
 }
 
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 9px;
+  margin-top: 12px;
+  max-width: 260px;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+}
+.legend-title { flex-basis: 100%; }
+.legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.legend-item i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50% 0 50% 0; /* a little leaf */
+  display: inline-block;
+}
+
 .callout-lines {
   position: fixed;
   inset: 0;

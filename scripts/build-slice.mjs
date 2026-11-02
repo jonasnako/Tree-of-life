@@ -3,6 +3,8 @@
 //
 //   Open Tree of Life (synthetic tree)  -> branching structure, species counts
 //   TimeTree (pairwise divergence API)  -> dates of the forks
+//   Wikidata (SPARQL)                   -> IUCN conservation status and
+//                                          English common names
 //
 // The slice is the full path from the root to each showcase species, plus
 // every sister clade along those paths collapsed to one node with its real
@@ -92,6 +94,110 @@ async function timetree(a, b) {
   const age = Number(row.adjusted_age || row.precomputed_age);
   return Number.isFinite(age) && age > 0 ? age : null;
 }
+
+const WD = 'https://query.wikidata.org/sparql';
+async function wikidata(query) {
+  return cached(`wd ${query}`, async () => {
+    const res = await fetch(`${WD}?query=${encodeURIComponent(query)}`, {
+      headers: { accept: 'application/sparql-results+json', 'user-agent': 'TreeOfLife/0.1 (https://github.com/jonasnako/tree-of-life)' },
+    });
+    if (!res.ok) throw new Error(`Wikidata HTTP ${res.status}`);
+    return (await res.json()).results.bindings;
+  });
+}
+// Wikidata has more than one item per IUCN category (older and newer), so
+// status items are mapped by their English label.
+const IUCN_LABELS = [
+  ['least concern', 'LC'],
+  ['near threatened', 'NT'],
+  ['vulnerable', 'VU'],
+  ['critically endangered', 'CR'],
+  ['endangered', 'EN'],
+  ['extinct in the wild', 'EW'],
+  ['extinct', 'EX'],
+  ['data deficient', 'DD'],
+];
+async function iucnCodes(qids) {
+  const codes = new Map();
+  if (!qids.length) return codes;
+  const rows = await wikidata(`SELECT ?s ?label WHERE {
+    VALUES ?s { ${qids.map((q) => `wd:${q}`).join(' ')} }
+    ?s rdfs:label ?label. FILTER(LANG(?label) = "en")
+  }`);
+  for (const r of rows) {
+    const label = r.label.value.toLowerCase();
+    const hit = IUCN_LABELS.find(([words]) => label.includes(words));
+    if (hit) codes.set(r.s.value.split('/').pop(), hit[1]);
+  }
+  return codes;
+}
+const sparqlString = (s) => `"${s.replace(/["\\]/g, '')}"`;
+
+/** Status and common name for species, matched by scientific name. */
+async function speciesFacts(names) {
+  const facts = new Map();
+  for (let i = 0; i < names.length; i += 80) {
+    const chunk = names.slice(i, i + 80);
+    const rows = await wikidata(`SELECT ?name ?status ?common WHERE {
+      VALUES ?name { ${chunk.map(sparqlString).join(' ')} }
+      ?item wdt:P225 ?name.
+      OPTIONAL { ?item wdt:P141 ?status. }
+      OPTIONAL { ?item wdt:P1843 ?common. FILTER(LANG(?common) = "en") }
+    }`);
+    for (const r of rows) {
+      const f = facts.get(r.name.value) ?? {};
+      if (r.status) f.statusItem = r.status.value.split('/').pop();
+      if (r.common && (!f.common || r.common.value.length < f.common.length)) f.common = r.common.value;
+      facts.set(r.name.value, f);
+    }
+  }
+  const codes = await iucnCodes([...new Set([...facts.values()].map((f) => f.statusItem).filter(Boolean))]);
+  for (const f of facts.values()) if (f.statusItem && codes.has(f.statusItem)) f.status = codes.get(f.statusItem);
+  return facts;
+}
+
+/** English common names for higher taxa (shortest one Wikidata knows). */
+async function cladeCommonNames(names) {
+  const common = new Map();
+  for (let i = 0; i < names.length; i += 80) {
+    const chunk = names.slice(i, i + 80);
+    // The taxon common name (P1843) if there is one, else the English label
+    // when it differs from the scientific name (e.g. Mammalia -> "mammal").
+    const rows = await wikidata(`SELECT ?name ?common ?label WHERE {
+      VALUES ?name { ${chunk.map(sparqlString).join(' ')} }
+      ?item wdt:P225 ?name.
+      OPTIONAL { ?item wdt:P1843 ?common. FILTER(LANG(?common) = "en") }
+      OPTIONAL { ?item rdfs:label ?label. FILTER(LANG(?label) = "en") }
+    }`);
+    for (const r of rows) {
+      const name = r.name.value;
+      let c = r.common?.value;
+      if (!c && r.label && r.label.value.toLowerCase() !== name.toLowerCase()) c = r.label.value;
+      if (!c) continue;
+      if (!common.has(name) || c.length < common.get(name).length) common.set(name, c);
+    }
+  }
+  return common;
+}
+
+/** Tips under a node (small sub-trees only): { name, ott }. */
+async function tips(nodeId) {
+  const sub = await ot('tree_of_life/subtree', { node_id: nodeId, format: 'newick', label_format: 'name_and_id' });
+  if (!sub.newick) return [];
+  return [...sub.newick.matchAll(/[(,]\s*'?([^():,;']+)'?/g)]
+    .map((m) => m[1].replace(/_/g, ' ').trim())
+    .map((label) => {
+      const id = label.match(/ ott(\d+)$/);
+      return { name: id ? label.slice(0, id.index).trim() : label, ott: id ? Number(id[1]) : null };
+    })
+    .filter((t) => t.name);
+}
+const capitalise = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+/** "Gorilla beringei graueri" or "Amanita crenulata MM 9.01.06" -> the species name. */
+const binomial = (name) => {
+  const w = name.split(/\s+/);
+  return w.length >= 2 && /^[a-z][a-z-]+$/.test(w[1]) && !['sp.', 'cf.', 'aff.'].includes(w[1]) ? `${w[0]} ${w[1]}` : name;
+};
 
 async function pool(items, limit, fn) {
   const out = new Array(items.length);
@@ -340,12 +446,56 @@ async function main() {
     }
   }
 
+  // Species leaves and conservation status (step 6). Every tip with ten or
+  // fewer species is drawn as one leaf per species, so it lists them with
+  // their IUCN status; a showcase species is one leaf.
+  console.log('Listing species of small tips and fetching their status from Wikidata…');
+  const hasKids = new Set(out.map((o) => o.parent));
+  const small = out.filter((o) => !hasKids.has(o.id) && !o.grouped && (o.common || o.species <= 10));
+  for (const o of small) {
+    if (o.common) {
+      o.species = 1;
+      o.leaves = [{ name: o.name }];
+    } else {
+      // Subspecies and strains merge into their species: one leaf each.
+      const all = await tips(o.id);
+      const bySpecies = new Map();
+      for (const t of all) if (!bySpecies.has(binomial(t.name))) bySpecies.set(binomial(t.name), t);
+      const list = [...bySpecies.entries()].slice(0, 10);
+      // Fossil species (flagged extinct in the taxonomy) keep their place
+      // on the twig but grow no leaf.
+      const flags = await pool(list, 4, async ([, t]) => (t.ott ? isExtinct(await taxon(t.ott)) : false));
+      o.leaves = list.map(([name], i) => (flags[i] ? { name, extinct: true } : { name }));
+      o.species = Math.max(1, o.leaves.length);
+    }
+  }
+  const facts = await speciesFacts([...new Set(small.flatMap((o) => o.leaves.map((l) => l.name)))]);
+  let rated = 0;
+  for (const o of small) {
+    for (const l of o.leaves) {
+      const f = facts.get(l.name);
+      if (f?.status) {
+        l.status = f.status;
+        rated++;
+      }
+      if (f?.common) l.common = capitalise(f.common);
+    }
+  }
+  console.log(`  ${small.reduce((s, o) => s + o.leaves.length, 0)} species leaves, ${rated} with an IUCN status.`);
+
+  console.log('Fetching common names for clades…');
+  const named = out.filter((o) => !o.common && !o.grouped && /^[A-Z][a-z]+$/.test(o.name));
+  const commons = await cladeCommonNames([...new Set(named.map((o) => o.name))]);
+  for (const o of named) if (commons.has(o.name)) o.common = capitalise(commons.get(o.name));
+  console.log(`  ${named.filter((o) => o.common).length} of ${named.length} clades have a common name.`);
+
   const file = {
     about:
-      'Real-data slice (build step 4): the path from the root to each showcase species, with every living sister clade collapsed to one node. Structure and species counts (tips in the synthetic tree) from the Open Tree of Life; fork dates from TimeTree pairwise divergence times, a published anchor for the root, and interpolation where neither has an estimate (dateSource on each inner node says which). splitMa is when a node split from its sister. Fossil-only lineages are left out for now.',
+      'Real-data slice (build step 4): the path from the root to each showcase species, with every living sister clade collapsed to one node. Structure and species counts (tips in the synthetic tree) from the Open Tree of Life; fork dates from TimeTree pairwise divergence times, a published anchor for the root, and interpolation where neither has an estimate (dateSource on each inner node says which). splitMa is when a node split from its sister. Tips of ten or fewer species list their species (leaves) with IUCN conservation status and common names from Wikidata. Fossil-only lineages are left out for now.',
     sources: {
       openTree: 'https://tree.opentreeoflife.org (synthetic tree, v3 API)',
       timeTree: 'https://timetree.org (pairwise divergence times)',
+      wikidata: 'https://www.wikidata.org (IUCN conservation status P141, common names P1843)',
       anchors: Object.values(ANCHORS).map((a) => a.source),
     },
     built: new Date().toISOString().slice(0, 10),
