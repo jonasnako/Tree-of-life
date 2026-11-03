@@ -1,18 +1,20 @@
-// The immensity of a big clade: dense foliage on small side twigs.
+// The immensity of a big clade: soft, round, fractal foliage.
 //
-// Each living clade richer than ten species grows many thin sprigs from the
-// last part of its twig (angled outward and forward, like real side shoots),
-// and every small leaf grows along a sprig, mostly toward its tip. Twig,
-// sprig and leaf are placed from the same branch frame on the GPU (see
-// branchTexture.js) and sway with the same wind, so no leaf floats. Richer
-// clades get more sprigs, more leaves and a thicker leafy sleeve (its radius
-// grows with the sixth root of the species count).
+// Each living clade richer than ten species carries clumps of foliage on
+// short sprigs off the last part of its twig; each clump is made of smaller
+// sub-clumps, and each sub-clump of many small leaves sitting on its surface
+// (twig -> sprig -> clump -> sub-clump -> leaf, a little fractal). Every leaf
+// takes its normal from the clump it belongs to, so a clump is lit as one
+// round, soft volume (bright where it faces the sun, shaded inside), and
+// leaves point outward, calm rather than spiky. Richer clades get more and
+// bigger clumps (the leafy sleeve grows with the sixth root of species).
 //
+// Twig, sprig, clump and leaf are placed from the same branch frame on the
+// GPU (branchTexture.js) and sway with the same wind, so nothing floats.
 // Leaves are GPU points drawn as little leaf shapes, coloured by conservation
 // status sampled from the clade's approximate share of threatened species.
-// Detail follows the zoom, leaf by leaf: each point knows its distance to the
-// camera, and far away only a shuffled share of them draws (a little larger),
-// while everything near the camera draws in full.
+// Detail follows the zoom leaf by leaf: near the camera every leaf draws, far
+// away a shuffled share draws, a little larger.
 import * as THREE from 'three';
 import { createRandom } from '../random.js';
 import { windUniforms, WIND_GLSL } from '../wind.js';
@@ -25,7 +27,7 @@ const glsl = (hex) => {
   return `vec3(${c.r.toFixed(4)}, ${c.g.toFixed(4)}, ${c.b.toFixed(4)})`;
 };
 
-// Shared: the twig's frame at a point `along` its last part (0 = tip).
+// Shared: the twig's frame at a point "along" its last part (0 = tip).
 const FRAME_GLSL = /* glsl */ `
 uniform float uNow;
 uniform highp sampler2D uBranchTex;
@@ -49,7 +51,28 @@ float twigFrame(vec4 br, float along, float open, out vec3 P, out vec3 T, out ve
 }
 `;
 
-export function createFoliageDust(branches, branchTex, { budget = 160000, sprigBudget = 9000 } = {}) {
+const v3 = {
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  mul: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+  len: (a) => Math.hypot(a[0], a[1], a[2]),
+  norm: (a) => {
+    const l = Math.hypot(a[0], a[1], a[2]) || 1;
+    return [a[0] / l, a[1] / l, a[2] / l];
+  },
+};
+const randomDir = (rand) => {
+  let x, y, z, d;
+  do {
+    x = rand.range(-1, 1);
+    y = rand.range(-1, 1);
+    z = rand.range(-1, 1);
+    d = x * x + y * y + z * z;
+  } while (d > 1 || d < 1e-3);
+  return v3.norm([x, y, z]);
+};
+
+export function createFoliageDust(branches, branchTex, { budget = 200000 } = {}) {
   const masses = branches.filter(
     (br) => !br.isRoot && !br.node.children.length && !br.node.endMa && !br.node.leaves && (br.node.species ?? 1) > TUFT_MAX,
   );
@@ -59,36 +82,47 @@ export function createFoliageDust(branches, branchTex, { budget = 160000, sprigB
   const sprigs = [];
   const leaves = [];
   masses.forEach((br, m) => {
-    const rand = createRandom(`${br.node.id}-sprigs`);
+    const rand = createRandom(`${br.node.id}-clumps`);
     const species = br.node.species;
     const ls = br.leafScale ?? 1;
-    const R = 0.3 * Math.pow(species, 1 / 6) * ls; // thickness of the leafy sleeve
-    const nSprigs = Math.max(5, Math.round((sprigBudget * weights[m]) / total));
-    const nLeaves = Math.max(40, Math.round((budget * weights[m]) / total));
+    const R = 0.42 * Math.pow(species, 1 / 6) * ls; // the leafy sleeve
+    const nClumps = Math.round(THREE.MathUtils.clamp(4 + 5 * Math.log10(species / TUFT_MAX), 4, 28));
+    const nLeaves = Math.max(60, Math.round((budget * weights[m]) / total));
     const threat = threatOf(br.node);
-    const mine = [];
-    for (let k = 0; k < nSprigs; k++) {
-      const along = Math.pow(rand(), 1.2) * 0.9;
+    // Local frame offsets are [along tangent, along normal, along binormal].
+    const clumps = [];
+    for (let k = 0; k < nClumps; k++) {
+      const along = k === 0 ? 0 : Math.pow(rand(), 1.1) * 0.85; // one clump crowns the tip
       const ang = rand.range(0, Math.PI * 2);
-      const elev = rand.range(0.25, 0.9); // leaning forward along the twig
-      const len = R * rand.range(0.6, 1.1) * (1 - 0.35 * along);
+      const elev = k === 0 ? 1.3 : rand.range(0.35, 1.0);
+      const reach = (k === 0 ? 0.35 : rand.range(0.45, 0.85)) * R * (1 - 0.35 * along);
       const dir = [Math.sin(elev), Math.cos(elev) * Math.cos(ang), Math.cos(elev) * Math.sin(ang)];
-      const s = { br, along, tip: dir.map((d) => d * len), radius: 0.012 * Math.max(0.5, ls) * (0.6 + len / Math.max(R, 1e-3)) };
-      sprigs.push(s);
-      mine.push(s);
+      const centre = v3.mul(dir, reach);
+      const radius = R * rand.range(0.38, 0.58) * (1 - 0.3 * along);
+      const subs = [];
+      for (let j = 0; j < 4; j++) {
+        const d = randomDir(rand);
+        subs.push({ centre: v3.add(centre, v3.mul(d, radius * 0.5)), radius: radius * rand.range(0.5, 0.65) });
+      }
+      const clump = { along, centre, radius, subs };
+      clumps.push(clump);
+      sprigs.push({ br, along, tip: centre, radius: 0.014 * Math.max(0.5, ls) * (0.7 + reach / Math.max(R, 1e-3)) });
     }
     for (let k = 0; k < nLeaves; k++) {
-      const s = mine[Math.floor(rand() * mine.length)];
-      const u = 0.3 + 0.7 * Math.pow(rand(), 0.6); // mostly toward the sprig's tip
-      const jitter = 0.12 * Math.hypot(...s.tip);
+      const c = clumps[Math.floor(rand() * clumps.length)];
+      const sc = c.subs[Math.floor(rand() * c.subs.length)];
+      const d = randomDir(rand);
+      const pos = v3.add(sc.centre, v3.mul(d, sc.radius * rand.range(0.8, 1.0)));
+      // Normal: mostly out of the whole clump, a little out of the sub-clump.
+      const normal = v3.norm(v3.add(v3.mul(v3.norm(v3.sub(pos, c.centre)), 0.65), v3.mul(d, 0.35)));
       leaves.push({
         br,
-        along: s.along,
-        off: s.tip.map((d) => d * u + rand.range(-1, 1) * jitter),
-        size: rand.range(0.06, 0.1) * Math.max(0.6, ls),
-        angle: rand.range(0, Math.PI * 2),
+        along: c.along,
+        off: pos,
+        normal,
+        size: rand.range(0.032, 0.052) * Math.max(0.6, ls),
         status: sampleStatus(threat, rand, 0.04),
-        shade: rand.range(0.75, 1.15),
+        shade: rand.range(0.82, 1.12),
         rank: rand(),
       });
     }
@@ -103,26 +137,28 @@ export function createFoliageDust(branches, branchTex, { budget = 160000, sprigB
   // --- Leaves: points.
   const n = leaves.length;
   const aLocal = new Float32Array(n * 4);
+  const aNormal = new Float32Array(n * 3);
   const aMisc = new Float32Array(n * 4);
-  const aRank = new Float32Array(n);
   leaves.forEach((p, i) => {
     aLocal.set([p.along, ...p.off], i * 4);
-    aMisc.set([p.size, p.angle, p.status, p.shade], i * 4);
-    aRank[i] = p.rank;
+    aNormal.set(p.normal, i * 3);
+    aMisc.set([p.size, p.rank, p.status, p.shade], i * 4);
   });
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
   geometry.setAttribute('aBranch', new THREE.BufferAttribute(branchAttr(leaves), 4));
   geometry.setAttribute('aLocal', new THREE.BufferAttribute(aLocal, 4));
+  geometry.setAttribute('aNormal', new THREE.BufferAttribute(aNormal, 3));
   geometry.setAttribute('aMisc', new THREE.BufferAttribute(aMisc, 4));
-  geometry.setAttribute('aRank', new THREE.BufferAttribute(aRank, 1));
 
   const uniforms = THREE.UniformsUtils.merge([THREE.UniformsLib.fog]);
   Object.assign(uniforms, {
     uNow: { value: 0 },
     uBranchTex: { value: branchTex.texture },
     uPointScale: { value: 500 },
-    uLodNear: { value: 6 },
+    uLodNear: { value: 8 },
+    uSunDir: { value: new THREE.Vector3(0.7, 0.6, 0.3) },
+    uSunColor: leafLight.uSunColor,
     ...windUniforms,
     uCrown: leafLight.uCrown,
   });
@@ -134,11 +170,13 @@ export function createFoliageDust(branches, branchTex, { budget = 160000, sprigB
     vertexShader: /* glsl */ `
       attribute vec4 aBranch;
       attribute vec4 aLocal;
+      attribute vec3 aNormal;
       attribute vec4 aMisc;
-      attribute float aRank;
       uniform float uPointScale;
       uniform float uLodNear;
       uniform vec4 uCrown;
+      uniform vec3 uSunDir;
+      uniform vec3 uSunColor;
       varying vec3 vColor;
       varying float vAngle;
       ${WIND_GLSL}
@@ -151,22 +189,28 @@ export function createFoliageDust(branches, branchTex, { budget = 160000, sprigB
         float age = twigFrame(aBranch, aLocal.x, open, P, T, N, B);
         P += (T * aLocal.y + N * aLocal.z + B * aLocal.w) * open;
         P += windSway(P, age);
+        vec3 nrm = normalize(T * aNormal.x + N * aNormal.y + B * aNormal.z);
         vec4 mvPosition = modelViewMatrix * vec4(P, 1.0);
         gl_Position = projectionMatrix * mvPosition;
         // Detail by distance: near the camera every leaf, far away a shuffled
-        // share drawn a little larger.
+        // share, each grown a little more than they thin out.
         float dist = max(-mvPosition.z, 0.05);
         float keep = clamp(pow(uLodNear / dist, 2.0), 0.2, 1.0);
-        // Kept leaves grow a bit more than they thin out, so the canopy stays closed.
-        float size = aMisc.x * open * shown * step(aRank, keep) * pow(keep, -0.65);
+        float size = aMisc.x * open * shown * step(aMisc.y, keep) * pow(keep, -0.7);
         gl_PointSize = size * uPointScale / dist;
         // Healthy leaves in varied greens; threatened ones in their status colour.
         float s = aMisc.z;
-        vec3 green = mix(vec3(0.10, 0.36, 0.05), vec3(0.28, 0.62, 0.10), fract(aMisc.w * 7.31));
-        vColor = (s > 0.5 ? ${statusColors} : green) * aMisc.w;
+        vec3 green = mix(vec3(0.12, 0.38, 0.06), vec3(0.30, 0.60, 0.12), fract(aMisc.w * 7.31));
+        vec3 base = (s > 0.5 ? ${statusColors} : green) * aMisc.w;
+        // Each clump is lit as one soft, round volume.
+        float sun = dot(nrm, normalize(uSunDir));
+        float wrap = clamp((sun + 0.45) / 1.45, 0.0, 1.0);
         float inner = length(P - uCrown.xyz) / max(uCrown.w, 0.5);
-        vColor *= mix(0.62, 1.1, smoothstep(0.2, 0.95, inner));
-        vAngle = aMisc.y;
+        float ao = mix(0.7, 1.0, smoothstep(0.2, 0.95, inner));
+        vColor = base * (0.38 + 0.85 * wrap * uSunColor) * ao;
+        // Leaves point outward: turn each sprite along its normal on screen.
+        vec3 vn = normalize((modelViewMatrix * vec4(nrm, 0.0)).xyz);
+        vAngle = atan(vn.y, vn.x) - 1.5708;
         #include <fog_vertex>
       }`,
     fragmentShader: /* glsl */ `
@@ -174,14 +218,15 @@ export function createFoliageDust(branches, branchTex, { budget = 160000, sprigB
       varying float vAngle;
       #include <fog_pars_fragment>
       void main() {
-        // A small pointed leaf, turned at its own angle.
+        // A small rounded leaf, pointing outward.
         vec2 c = gl_PointCoord - 0.5;
+        c.y = -c.y;
         float ca = cos(vAngle), sa = sin(vAngle);
-        c = vec2(ca * c.x - sa * c.y, sa * c.x + ca * c.y);
-        float along = c.y * 2.0; // -1..1
-        float half_ = 0.32 * pow(max(1.0 - along * along, 0.0), 0.7);
+        c = vec2(ca * c.x + sa * c.y, -sa * c.x + ca * c.y);
+        float along = c.y * 2.0; // -1..1, tip at +1
+        float half_ = 0.36 * pow(max(1.0 - along * along, 0.0), 0.6) * (1.0 - 0.25 * along);
         if (abs(c.x) > half_ || abs(along) > 1.0) discard;
-        vec3 col = vColor * (0.82 + 0.3 * (0.5 - c.y)) * (1.0 - 0.25 * smoothstep(0.6, 1.0, abs(c.x) / half_));
+        vec3 col = vColor * (0.85 + 0.25 * (0.5 + c.y)) * (1.0 - 0.2 * smoothstep(0.6, 1.0, abs(c.x) / half_));
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -191,7 +236,7 @@ export function createFoliageDust(branches, branchTex, { budget = 160000, sprigB
   const points = new THREE.Points(geometry, material);
   points.frustumCulled = false;
 
-  // --- Sprigs: thin three-sided tubes from the twig to the leaves.
+  // --- Sprigs: short three-sided tubes from the twig into each clump.
   const tube = new THREE.BufferGeometry();
   {
     const pos = [];
@@ -241,7 +286,7 @@ export function createFoliageDust(branches, branchTex, { budget = 160000, sprigB
         .replace(
           '#include <begin_vertex>',
           /* glsl */ `
-          vec3 transformed = P + tipOff * position.y + (side * position.x + side2 * position.z) * aRadius * open * (1.0 - 0.7 * position.y);
+          vec3 transformed = P + tipOff * position.y + (side * position.x + side2 * position.z) * aRadius * open * (1.0 - 0.6 * position.y);
           transformed += windSway(transformed, sAge);`,
         );
   };
@@ -255,8 +300,11 @@ export function createFoliageDust(branches, branchTex, { budget = 160000, sprigB
   return {
     mesh,
     count: n,
-    update(now, renderer, camera) {
+    /** For picking: each mass's twig, sleeve size and clump centres. */
+    masses: masses.map((br) => ({ br, R: 0.42 * Math.pow(br.node.species, 1 / 6) * (br.leafScale ?? 1) })),
+    update(now, renderer, camera, sunDir) {
       uniforms.uNow.value = now;
+      if (sunDir) uniforms.uSunDir.value.copy(sunDir);
       const h = renderer.domElement.height;
       uniforms.uPointScale.value = h * 0.5 * camera.projectionMatrix.elements[5];
     },

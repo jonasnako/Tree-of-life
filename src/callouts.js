@@ -25,7 +25,8 @@ export function createCallouts({ onPick } = {}) {
     const el = document.createElement('button');
     el.type = 'button';
     el.className = `callout ${callout.kind ?? ''}`;
-    el.innerHTML = '<span class="callout-title"></span><span class="callout-sub"></span>';
+    el.innerHTML =
+      '<img class="callout-img" alt="" hidden><span class="callout-text"><span class="callout-title"></span><span class="callout-sub"></span></span>';
     layer.append(el);
     const halo = document.createElementNS(NS, 'polyline');
     halo.setAttribute('class', 'callout-halo');
@@ -35,7 +36,28 @@ export function createCallouts({ onPick } = {}) {
     dot.setAttribute('class', `callout-dot ${callout.kind ?? ''}`);
     dot.setAttribute('r', callout.kind === 'focus' ? '3' : '2');
     svg.append(halo, line, dot);
-    const item = { el, halo, line, dot, title: null, sub: null, callout };
+    // The followed species' leaf gets a soft pulsing ring, so it can be found.
+    let ring = null;
+    if (callout.kind === 'focus') {
+      ring = document.createElementNS(NS, 'circle');
+      ring.setAttribute('class', 'callout-ring');
+      ring.setAttribute('r', '11');
+      svg.append(ring);
+    }
+    const item = {
+      el,
+      halo,
+      line,
+      dot,
+      ring,
+      img: el.querySelector('.callout-img'),
+      titleEl: el.querySelector('.callout-title'),
+      subEl: el.querySelector('.callout-sub'),
+      title: null,
+      sub: null,
+      src: null,
+      callout,
+    };
     el.addEventListener('click', () => onPick?.(item.callout));
     items.set(callout.key, item);
     return item;
@@ -53,7 +75,7 @@ export function createCallouts({ onPick } = {}) {
     const cx = (c.x * 0.5 + 0.5) * w;
     const cy = (-c.y * 0.5 + 0.5) * h;
     // Everything on screen that labels must not cover.
-    const blockers = ['.controls', '.topbar', '.hud']
+    const blockers = ['.controls', '.topbar', '.hud', '.info']
       .map((q) => document.querySelector(q)?.getBoundingClientRect())
       .filter((r) => r && r.width)
       .map((r) => ({ x: r.left - 6, y: r.top - 6, w: r.width + 12, h: r.height + 12 }));
@@ -70,8 +92,13 @@ export function createCallouts({ onPick } = {}) {
       const item = items.get(callout.key) ?? make(callout);
       item.callout = callout;
       seen.add(callout.key);
-      if (item.title !== callout.title) item.el.firstChild.textContent = item.title = callout.title;
-      if (item.sub !== (callout.sub ?? '')) item.el.lastChild.textContent = item.sub = callout.sub ?? '';
+      if (item.title !== callout.title) item.titleEl.textContent = item.title = callout.title;
+      if (item.sub !== (callout.sub ?? '')) item.subEl.textContent = item.sub = callout.sub ?? '';
+      if (item.src !== (callout.img ?? null)) {
+        item.src = callout.img ?? null;
+        item.img.hidden = !item.src;
+        if (item.src) item.img.src = item.src;
+      }
 
       // Try spots around the anchor, starting outward from the tree's centre,
       // close in first. A spot must stay on screen and clear of the controls
@@ -125,6 +152,10 @@ export function createCallouts({ onPick } = {}) {
       item.dot.setAttribute('cx', ax.toFixed(1));
       item.dot.setAttribute('cy', ay.toFixed(1));
       item.dot.style.opacity = alpha;
+      if (item.ring) {
+        item.ring.setAttribute('cx', ax.toFixed(1));
+        item.ring.setAttribute('cy', ay.toFixed(1));
+      }
     }
 
     for (const [key, item] of items) {
@@ -133,6 +164,7 @@ export function createCallouts({ onPick } = {}) {
       item.halo.remove();
       item.line.remove();
       item.dot.remove();
+      item.ring?.remove();
       items.delete(key);
     }
   }

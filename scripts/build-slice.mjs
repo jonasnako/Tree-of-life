@@ -20,6 +20,9 @@ import crypto from 'node:crypto';
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const CACHE = path.join(ROOT, 'raw', 'cache');
 const OUT = path.join(ROOT, 'public', 'data', 'tree-slice.json');
+// Extra layer (CLAUDE.md, "Extra attributes as separate layers"): small images.
+const IMAGES_OUT = path.join(ROOT, 'public', 'data', 'images.json');
+const UA = 'TreeOfLife/0.1 (https://github.com/jonasnako/tree-of-life)';
 const OT = 'https://api.opentreeoflife.org/v3';
 const TT = 'https://timetree.org/api/pairwise';
 
@@ -543,6 +546,62 @@ async function main() {
   };
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify(file, null, 0).replace(/\{"id"/g, '\n{"id"') + '\n');
+
+  // Small pictures for labels and info cards: the Wikidata image (P18) of
+  // each named group and listed species, as a 48 px Wikimedia Commons
+  // thumbnail embedded as a data URI (the page may not load images from
+  // other sites). Keyed by node id, and by species name for listed leaves.
+  console.log('Fetching small images from Wikimedia Commons…');
+  const wanted = new Map(); // scientific name -> keys
+  const want = (name, key) => {
+    if (!name || /\d|smaller lineages|Unnamed|Relatives of/.test(name)) return;
+    if (!wanted.has(name)) wanted.set(name, []);
+    wanted.get(name).push(key);
+  };
+  for (const o of out) {
+    want(o.name, `id:${o.id}`);
+    for (const l of o.leaves ?? []) want(l.name, `sp:${l.name}`);
+  }
+  const files = new Map();
+  const names = [...wanted.keys()];
+  for (let i = 0; i < names.length; i += 80) {
+    const chunk = names.slice(i, i + 80);
+    const rows = await wikidata(`SELECT ?name ?image WHERE {
+      VALUES ?name { ${chunk.map(sparqlString).join(' ')} }
+      ?item wdt:P225 ?name; wdt:P18 ?image.
+    }`);
+    for (const r of rows) if (!files.has(r.name.value)) files.set(r.name.value, decodeURIComponent(r.image.value.split('/').pop()));
+  }
+  const images = {}; // key -> index into pictures
+  const pictures = []; // { src, file }, each picture once
+  const pictureIndex = new Map();
+  let bytes = 0;
+  await pool([...files.entries()], 4, async ([name, file]) => {
+    const thumb = await cached(`thumb48 ${file}`, async () => {
+      const res = await fetch(`https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(file)}?width=48`, { headers: { 'user-agent': UA } });
+      if (!res.ok) return null;
+      const type = res.headers.get('content-type') ?? 'image/jpeg';
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > 9000) return null; // keep the page small
+      return `data:${type};base64,${buf.toString('base64')}`;
+    });
+    if (!thumb) return;
+    if (!pictureIndex.has(file)) {
+      pictureIndex.set(file, pictures.length);
+      pictures.push({ src: thumb, file });
+      bytes += thumb.length;
+    }
+    for (const key of wanted.get(name)) images[key] = pictureIndex.get(file);
+  });
+  fs.writeFileSync(
+    IMAGES_OUT,
+    JSON.stringify({
+      about: 'Small images (48 px thumbnails) from Wikimedia Commons, via the Wikidata image property (P18). Keys: id:<node id> or sp:<species name>, each pointing to an entry in pictures. Each picture keeps its Commons file name; see https://commons.wikimedia.org/wiki/File:<file> for author and licence.',
+      images,
+      pictures,
+    }) + '\n',
+  );
+  console.log(`  ${Object.keys(images).length} names, ${pictures.length} pictures (${Math.round(bytes / 1024)} KB) to ${path.relative(ROOT, IMAGES_OUT)}.`);
   console.log(`Wrote ${out.length} nodes to ${path.relative(ROOT, OUT)} (origin ${origin} Ma, ${requests} new requests).`);
 }
 

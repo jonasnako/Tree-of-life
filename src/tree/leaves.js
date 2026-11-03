@@ -373,7 +373,7 @@ void computeLeaf(out vec3 outPos, out vec3 outNormal) {
     float cone = mix(0.12, 0.9, along);
     shown *= 1.0 - uReveal.w * (1.0 - smoothstep(cone * 0.7, cone, off)) * step(along, 0.98);
   }
-  float size = aShape.z * scale * shown;
+  float size = aShape.z * scale * shown * (1.0 + 0.8 * vGlow); // the followed species' leaf is larger
   #ifdef SPRAY_LEAVES
     size *= uLodScale;
   #endif
